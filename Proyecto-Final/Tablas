@@ -1,0 +1,118 @@
+📊 Estructura de la Base de Datos (Firestore)
+
+NOTA: Este proyecto usa Cloud Firestore (NoSQL), no una base SQL.
+- "Tabla"  -> Colección
+- "Fila"   -> Documento
+- "id PK"  -> ID del documento (auto-generado o el UID de Auth)
+- "FK"     -> se guarda el ID como string; NO hay JOINs (se lee aparte o se denormaliza)
+- "ENUM"   -> un string (se valida en la app / reglas)
+- "TIMESTAMP" -> Timestamp de Firestore (serverTimestamp())
+
+======================================================================
+1. usuarios/{uid}
+----------------------------------------------------------------------
+El ID del documento ES el UID de Firebase Auth (no se inventa un UUID).
+Firebase Auth gestiona la contraseña: NO se guarda password aquí.
+
+Campo        Tipo        Descripción
+nombre       string      Nombre completo
+email        string      Correo electrónico
+telefono     string      WhatsApp / contacto
+rol          string      "admin" | "comprador"
+creado_en    Timestamp   Fecha de registro
+
+======================================================================
+2. rifas/{rifaId}
+----------------------------------------------------------------------
+Campo           Tipo        Descripción
+titulo          string      Nombre de la rifa
+descripcion     string      Detalle del premio
+imagen_premio   string      URL de la imagen (Firebase Storage)
+precio_numero   number      Precio por número
+total_numeros   number      Cantidad total (ej: 100)
+modo_juego      string      "clasica" | "terminacion" | "tramos" | "expres"
+estado          string      "activa" | "cerrada" | "sorteada"
+fecha_sorteo    Timestamp   Cuándo se realiza
+numero_ganador  number      Se llena al sortear (null mientras tanto)
+admin_id        string      UID del usuario admin que la creó
+creado_en       Timestamp   Fecha de creación
+
+======================================================================
+3. rifas/{rifaId}/numeros/{numero}   (SUBCOLECCIÓN)
+----------------------------------------------------------------------
+Los números viven dentro de su rifa. El ID del documento puede ser el
+propio número (ej: "042") para acceso directo.
+
+Campo          Tipo        Descripción
+numero         number      Número (ej: 42)
+estado         string      "disponible" | "reservado" | "pagado"
+comprador_id   string      UID del comprador (null si está libre)
+reservado_en   Timestamp   Cuándo se reservó (null si libre)
+
+======================================================================
+4. ventas/{ventaId}
+----------------------------------------------------------------------
+Datos DENORMALIZADOS: se copian numero y nombre_comprador para no tener
+que hacer lecturas extra al mostrar la lista de ventas.
+
+Campo             Tipo        Descripción
+rifa_id           string      ID de la rifa
+numero            number      Número comprado (copiado)
+comprador_id      string      UID del comprador
+nombre_comprador  string      Nombre del comprador (copiado)
+monto             number      Monto pagado
+estado_pago       string      "pendiente" | "confirmado" | "rechazado"
+comprobante_url   string      Foto del comprobante (Firebase Storage)
+confirmado_por    string      UID del admin que confirmó (null si pendiente)
+creado_en         Timestamp   Fecha de compra
+
+======================================================================
+5. rifas/{rifaId}/premios/{premioId}   (SUBCOLECCIÓN)
+----------------------------------------------------------------------
+Para rifas con múltiples premios (modo "tramos").
+
+Campo           Tipo        Descripción
+descripcion     string      Descripción del premio
+imagen_url      string      Foto del premio (Firebase Storage)
+numero_ganador  number      Número que lo ganó (null hasta el sorteo)
+posicion        number      1er premio, 2do, etc.
+
+======================================================================
+6. notificaciones/{notifId}
+----------------------------------------------------------------------
+Campo        Tipo        Descripción
+usuario_id   string      UID destinatario
+tipo         string      "compra" | "sorteo" | "ganador" | "pago"
+mensaje      string      Contenido
+leida        boolean     Si ya fue vista
+creado_en    Timestamp   Fecha
+
+======================================================================
+7. rifas/{rifaId}/modo_terminacion   (DOCUMENTO o campos en la rifa)
+----------------------------------------------------------------------
+Solo si usas el modo "terminación" (último dígito de la lotería).
+Al ser 1-a-1 con la rifa, puede ir como un documento único dentro de
+la rifa o como campos en el propio documento de la rifa.
+
+Campo                Tipo        Descripción
+digito_ganador       number      Último dígito (0–9)
+loteria_referencia   string      Ej: "Lotería Nacional CR"
+fecha                Timestamp   Fecha del sorteo externo
+
+======================================================================
+🔗 Relaciones (en Firestore = referencias por ID, sin JOIN)
+======================================================================
+usuarios   --<  rifas              (admin_id)      un admin crea muchas rifas
+rifas      --<  numeros            (subcolección)  una rifa tiene muchos números
+usuarios   --<  ventas             (comprador_id)  un usuario hace muchas compras
+numeros    --   ventas             (numero/rifa_id) un número -> una venta
+rifas      --<  premios            (subcolección)  una rifa puede tener varios premios
+usuarios   --<  notificaciones     (usuario_id)    un usuario recibe muchas notificaciones
+
+======================================================================
+🖼️  Archivos (imágenes / comprobantes) -> Firebase Storage
+======================================================================
+No se guardan en Firestore. Se sube el archivo a Storage y en el
+documento se guarda solo la URL:
+  rifas/{rifaId}/premio.jpg        -> imagen_premio
+  ventas/{ventaId}/comprobante.jpg -> comprobante_url
