@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   collection,
   doc,
+  getDoc, // <-- Agregado para poder leer el perfil del comprador
   getDocs,
   onSnapshot,
   serverTimestamp,
@@ -48,6 +49,65 @@ const ESTADO_COLOR: Record<EstadoRifa, string> = {
 function alerta(titulo: string, msg: string) {
   if (Platform.OS === 'web') { window.alert(`${titulo}\n${msg}`); return; }
 }
+
+// --- NUEVA FUNCIÓN: Notificación remota a todos los participantes ---
+async function notificarResultadosSorteo(rifaId: string, tituloRifa: string, numeroGanador: string, uidGanador: string) {
+  try {
+    const numerosRef = collection(db, 'rifas', rifaId, 'numeros');
+    const numerosSnap = await getDocs(numerosRef);
+
+    // Usamos Set para evitar mandar notificaciones duplicadas a alguien que compró varios números
+    const compradoresUids = new Set<string>();
+    numerosSnap.forEach(docSnap => {
+      const data = docSnap.data();
+      if (data.comprador_uid) {
+        compradoresUids.add(data.comprador_uid);
+      }
+    });
+
+    for (const uid of compradoresUids) {
+      const usuarioRef = doc(db, 'usuarios', uid);
+      const usuarioSnap = await getDoc(usuarioRef);
+      
+      if (!usuarioSnap.exists()) continue;
+      
+      const token = usuarioSnap.data()?.expoPushToken;
+      if (!token) continue;
+
+      let tituloNotif = '';
+      let cuerpoNotif = '';
+
+      if (uid === uidGanador) {
+        tituloNotif = '¡FELICIDADES! 🎉';
+        cuerpoNotif = `Has sido el ganador de la rifa "${tituloRifa}" con el número ${numeroGanador}.`;
+      } else {
+        tituloNotif = 'Sorteo Finalizado 🎲';
+        cuerpoNotif = `La rifa "${tituloRifa}" ya se ha jugado. ¡Suerte a la próxima!`;
+      }
+
+      const mensaje = {
+        to: token,
+        sound: 'default',
+        title: tituloNotif,
+        body: cuerpoNotif,
+        data: { rifaId: rifaId },
+      };
+
+      await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Accept-encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(mensaje),
+      });
+    }
+  } catch (error) {
+    console.error('Error al notificar los resultados del sorteo:', error);
+  }
+}
+// --------------------------------------------------------------------
 
 export default function AdminRifaScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -168,11 +228,15 @@ export default function AdminRifaScreen() {
       setGanador(ganadorElegido);
       setGanadorModal(true);
 
-      //Llamada a la clase de notificaciones
+      // Llamada a la clase de notificaciones local para el administrador
       await enviarNotificacion(
         "¡Tenemos Ganador!",
         `El número #${ganadorElegido.numero} es el ganador de la rifa "${rifa.titulo}"`
       );
+
+      // LLAMADA NUEVA: Disparamos la notificación masiva a los celulares de los compradores
+      // (Lo llamamos sin 'await' para que no bloquee la interfaz gráfica del admin)
+      notificarResultadosSorteo(id, rifa.titulo, ganadorElegido.numero, ganadorElegido.comprador_uid);
 
     } catch {
       alerta('Error', 'No se pudo registrar el ganador.');

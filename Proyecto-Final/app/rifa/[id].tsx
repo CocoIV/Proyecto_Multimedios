@@ -8,11 +8,10 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -25,7 +24,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-//  Importamos tu clase notificacion
+// Importamos tu clase notificacion
 import { enviarNotificacion } from '@/utils/notificaciones'; 
 
 import { db } from '@/config/firebase';
@@ -35,6 +34,69 @@ import type { NumeroDoc, Rifa } from '@/types/rifa';
 
 type NumeroConId = NumeroDoc & { numero: string };
 type EstadoNumero = 'libre' | 'mio' | 'ocupado';
+
+// --- NUEVA FUNCIÓN: Notificación remota al creador con lógica de "Rifa Llena" ---
+async function procesarNotificacionAlCreador(rifaId: string, numeroComprado: string) {
+  try {
+    const rifaRef = doc(db, 'rifas', rifaId);
+    const rifaSnap = await getDoc(rifaRef);
+    
+    if (!rifaSnap.exists()) return;
+    
+    const datosRifa = rifaSnap.data();
+    const creadorUid = datosRifa?.creador_uid;
+    const tituloRifa = datosRifa?.titulo ?? 'tu rifa';
+    const totalNumeros = datosRifa?.total_numeros ?? 0;
+    const vendidos = datosRifa?.vendidos ?? 0;
+
+    if (!creadorUid) return;
+
+    // Buscamos el token del creador
+    const usuarioRef = doc(db, 'usuarios', creadorUid);
+    const usuarioSnap = await getDoc(usuarioRef);
+
+    if (!usuarioSnap.exists()) return;
+
+    const tokenDelAdmin = usuarioSnap.data()?.expoPushToken;
+
+    if (!tokenDelAdmin) {
+      console.log('El creador no tiene token registrado.');
+      return;
+    }
+
+    // --- LÓGICA INTELIGENTE ---
+    let tituloNotif = '¡Número Vendido! 🎟️';
+    let cuerpoNotif = `Se compró el número ${numeroComprado} en tu rifa "${tituloRifa}".`;
+
+    // Si los vendidos son iguales o mayores al total, ¡es "Sold Out"!
+    if (vendidos >= totalNumeros) {
+      tituloNotif = '¡RIFA LLENA! 🏆';
+      cuerpoNotif = `¡Felicidades! Se han vendido todos los números de "${tituloRifa}". Es hora de sortear.`;
+    }
+
+    const mensaje = {
+      to: tokenDelAdmin,
+      sound: 'default',
+      title: tituloNotif,
+      body: cuerpoNotif,
+      data: { rifaId: rifaId },
+    };
+
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(mensaje),
+    });
+
+  } catch (error) {
+    console.error('Error al notificar al creador:', error);
+  }
+}
+// -----------------------------------------------------
 
 export default function RifaDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -170,11 +232,14 @@ export default function RifaDetailScreen() {
         tx.update(rifaRef, { vendidos: (rifaSnap.data().vendidos ?? 0) + 1 });
       });
 
-      //llamada a la  clase de notificaciones
+      // Llamada a la clase de notificaciones local para el comprador
       await enviarNotificacion(
-        "¡Número Adquirido!", 
-        `El número #${numeroSeleccionado} para la rifa "${rifa?.titulo}" es tuyo. ¡Buena suerte!`
+        "Numero Adquirido", 
+        `El numero #${numeroSeleccionado} para la rifa "${rifa?.titulo}" es tuyo. Buena suerte`
       );
+
+      // LLAMADA NUEVA: Notificacion remota para el creador de la rifa (ejecutada en segundo plano)
+      procesarNotificacionAlCreador(id!, String(numeroSeleccionado));
 
       setPaso(4);
     } catch (e: any) {
@@ -226,13 +291,13 @@ export default function RifaDetailScreen() {
         {/* Info de la rifa */}
         <View style={styles.infoCard}>
           <Text style={styles.premioLabel}>Premio</Text>
-          <Text style={styles.premioText}>🎁 {rifa.premio}</Text>
+          <Text style={styles.premioText}>Premio: {rifa.premio}</Text>
           {rifa.descripcion ? <Text style={styles.desc}>{rifa.descripcion}</Text> : null}
 
           <View style={styles.statsRow}>
             <View style={styles.stat}>
               <Text style={styles.statVal}>₡{(rifa.precio ?? 0).toLocaleString('es-CR')}</Text>
-              <Text style={styles.statLabel}>por número</Text>
+              <Text style={styles.statLabel}>por numero</Text>
             </View>
             <View style={styles.statDiv} />
             <View style={styles.stat}>
@@ -257,11 +322,11 @@ export default function RifaDetailScreen() {
           <View style={styles.ganadorBanner}>
             <View style={styles.ganadorBannerTop}>
               <Ionicons name="trophy" size={26} color={Brand.white} />
-              <Text style={styles.ganadorBannerTitulo}>¡Tenemos ganador!</Text>
+              <Text style={styles.ganadorBannerTitulo}>Tenemos ganador</Text>
             </View>
             <View style={styles.ganadorBannerBody}>
               <View style={styles.ganadorNumeroCircle}>
-                <Text style={styles.ganadorNumeroLabel}>N°</Text>
+                <Text style={styles.ganadorNumeroLabel}>N</Text>
                 <Text style={styles.ganadorNumeroVal}>{rifa.ganador_numero}</Text>
               </View>
               <View style={{ flex: 1 }}>
@@ -280,7 +345,7 @@ export default function RifaDetailScreen() {
             {rifa.ganador_uid === user?.uid && (
               <View style={styles.tuGanasteBanner}>
                 <Ionicons name="star" size={16} color={Brand.accent} />
-                <Text style={styles.tuGanasteText}>¡Sos el ganador! Contactá al organizador.</Text>
+                <Text style={styles.tuGanasteText}>Sos el ganador. Contacta al organizador.</Text>
               </View>
             )}
           </View>
@@ -326,7 +391,7 @@ export default function RifaDetailScreen() {
           <View style={styles.cerradaBanner}>
             <Ionicons name="lock-closed-outline" size={16} color={Brand.onLightMuted} />
             <Text style={styles.cerradaText}>
-              Esta rifa está {rifa.estado === 'sorteada' ? 'sorteada' : 'cerrada'} — ya no se pueden comprar números.
+              Esta rifa esta {rifa.estado === 'sorteada' ? 'sorteada' : 'cerrada'} — ya no se pueden comprar numeros.
             </Text>
           </View>
         )}
@@ -347,7 +412,7 @@ export default function RifaDetailScreen() {
             {paso === 1 && (
               <>
                 <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitulo}>Número #{numeroSeleccionado}</Text>
+                  <Text style={styles.modalTitulo}>Numero #{numeroSeleccionado}</Text>
                   <Pressable onPress={cerrarModal} style={styles.modalClose}>
                     <Ionicons name="close" size={20} color={Brand.onLightMuted} />
                   </Pressable>
@@ -359,7 +424,7 @@ export default function RifaDetailScreen() {
                     placeholder="Tu nombre" placeholderTextColor={Brand.onLightMuted} autoCapitalize="words" />
                 </View>
                 <View style={styles.modalCampo}>
-                  <Text style={styles.modalLabel}>Teléfono</Text>
+                  <Text style={styles.modalLabel}>Telefono</Text>
                   <TextInput style={styles.modalInput} value={compradorTelefono} onChangeText={setCompradorTelefono}
                     placeholder="Ej: 8888-8888" placeholderTextColor={Brand.onLightMuted} keyboardType="phone-pad" />
                 </View>
@@ -404,7 +469,7 @@ export default function RifaDetailScreen() {
                 </View>
 
                 <View style={styles.modalCampo}>
-                  <Text style={styles.modalLabel}>Número de tarjeta</Text>
+                  <Text style={styles.modalLabel}>Numero de tarjeta</Text>
                   <TextInput style={styles.modalInput} value={tarjetaNum}
                     onChangeText={v => setTarjetaNum(formatearTarjeta(v))}
                     placeholder="1234 5678 9012 3456" placeholderTextColor={Brand.onLightMuted}
@@ -434,7 +499,7 @@ export default function RifaDetailScreen() {
 
                 <View style={styles.seguridadWrap}>
                   <Ionicons name="lock-closed" size={13} color={Brand.success} />
-                  <Text style={styles.seguridadText}>Pago seguro simulado · Solo para demostración</Text>
+                  <Text style={styles.seguridadText}>Pago seguro simulado · Solo para demostracion</Text>
                 </View>
 
                 <Pressable style={({ pressed }) => [styles.comprarBtn, pressed && { opacity: 0.88 }]} onPress={procesarPago}>
@@ -449,7 +514,7 @@ export default function RifaDetailScreen() {
               <View style={styles.procesandoWrap}>
                 <ActivityIndicator size="large" color={Brand.primary} />
                 <Text style={styles.procesandoTitulo}>Procesando pago…</Text>
-                <Text style={styles.procesandoSub}>No cerrés esta ventana</Text>
+                <Text style={styles.procesandoSub}>No cerres esta ventana</Text>
               </View>
             )}
 
@@ -459,15 +524,15 @@ export default function RifaDetailScreen() {
                 <View style={styles.exitoIcono}>
                   <Ionicons name="checkmark" size={40} color={Brand.white} />
                 </View>
-                <Text style={styles.exitoTitulo}>¡Pago confirmado!</Text>
+                <Text style={styles.exitoTitulo}>Pago confirmado</Text>
                 <Text style={styles.exitoSub}>
-                  El número <Text style={{ fontWeight: '800' }}>#{numeroSeleccionado}</Text> es tuyo.{'\n'}
-                  ¡Buena suerte en el sorteo!
+                  El numero <Text style={{ fontWeight: '800' }}>#{numeroSeleccionado}</Text> es tuyo.{'\n'}
+                  Buena suerte en el sorteo
                 </Text>
                 <Pressable
                   style={({ pressed }) => [styles.comprarBtn, { marginTop: 8 }, pressed && { opacity: 0.88 }]}
                   onPress={() => setModalVisible(false)}>
-                  <Text style={styles.comprarBtnText}>Ver mi número</Text>
+                  <Text style={styles.comprarBtnText}>Ver mi numero</Text>
                 </Pressable>
               </View>
             )}
@@ -489,6 +554,7 @@ function LeyendaItem({ color, border, label }: { color: string; border?: string;
 }
 
 const styles = StyleSheet.create({
+  // --- LAYOUT GENERAL ---
   root: {
     flex: 1,
     backgroundColor: Brand.cream,
@@ -501,6 +567,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Brand.onLightMuted,
   },
+
+  // --- NAVBAR ---
   navBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -527,6 +595,8 @@ const styles = StyleSheet.create({
     color: Brand.onLight,
     marginHorizontal: 8,
   },
+
+  // --- INFO CARDS Y ESTADÍSTICAS ---
   infoCard: {
     margin: 16,
     backgroundColor: Brand.white,
@@ -595,6 +665,8 @@ const styles = StyleSheet.create({
     color: Brand.onLightMuted,
     textAlign: 'right',
   },
+
+  // --- GRILLA DE NÚMEROS ---
   leyenda: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -636,44 +708,38 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#D0DAD8',
   },
-  numBtnMio: {
-    backgroundColor: Brand.primary,
-    borderColor: Brand.primary,
-  },
-  numBtnOcupado: {
-    backgroundColor: '#C8D8D6',
-    borderColor: '#B0C4C2',
-  },
-  numBtnDisabled: {
-    opacity: 0.85,
-  },
-  numText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: Brand.onLight,
-  },
-  numTextMio: {
-    color: Brand.white,
-  },
-  numTextOcupado: {
-    color: Brand.onLightMuted,
-  },
-  // Banner ganador público
+  numBtnMio: { backgroundColor: Brand.primary, borderColor: Brand.primary },
+  numBtnOcupado: { backgroundColor: '#C8D8D6', borderColor: '#B0C4C2' },
+  numBtnDisabled: { opacity: 0.85 },
+  numText: { fontSize: 13, fontWeight: '700', color: Brand.onLight },
+  numTextMio: { color: Brand.white },
+  numTextOcupado: { color: Brand.onLightMuted },
+
+  // --- BANNERS (GANADOR/CERRADA) ---
   ganadorBanner: {
-    marginHorizontal: 16, marginBottom: 12, borderRadius: 18, overflow: 'hidden',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderRadius: 18,
+    overflow: 'hidden',
     backgroundColor: Brand.primaryDark,
   },
   ganadorBannerTop: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: Brand.accent, paddingHorizontal: 16, paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: Brand.accent,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   ganadorBannerTitulo: { fontSize: 15, fontWeight: '800', color: Brand.primaryDark },
-  ganadorBannerBody: {
-    flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16,
-  },
+  ganadorBannerBody: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16 },
   ganadorNumeroCircle: {
-    width: 60, height: 60, borderRadius: 30,
-    backgroundColor: Brand.accent, alignItems: 'center', justifyContent: 'center',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: Brand.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   ganadorNumeroLabel: { fontSize: 9, fontWeight: '700', color: Brand.primaryDark, letterSpacing: 1 },
   ganadorNumeroVal: { fontSize: 22, fontWeight: '900', color: Brand.primaryDark },
@@ -681,9 +747,14 @@ const styles = StyleSheet.create({
   ganadorBannerTel: { fontSize: 13, color: Brand.onDarkMuted, marginTop: 2 },
   ganadorBannerFecha: { fontSize: 11, color: Brand.onDarkMuted, marginTop: 4 },
   tuGanasteBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: Brand.accent + '30', padding: 12, paddingHorizontal: 16,
-    borderTopWidth: 1, borderTopColor: Brand.accent + '40',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: `${Brand.accent}30`,
+    padding: 12,
+    paddingHorizontal: 16,
+    borderTopWidth: 1,
+    borderTopColor: `${Brand.accent}40`,
   },
   tuGanasteText: { fontSize: 14, fontWeight: '700', color: Brand.accent, flex: 1 },
   cerradaBanner: {
@@ -696,12 +767,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#F0F4F3',
     borderRadius: 12,
   },
-  cerradaText: {
-    flex: 1,
-    fontSize: 13,
-    color: Brand.onLightMuted,
-  },
-  // Modal
+  cerradaText: { flex: 1, fontSize: 13, color: Brand.onLightMuted },
+
+  // --- MODAL DE COMPRA ---
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -719,11 +787,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  modalTitulo: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: Brand.onLight,
-  },
+  modalTitulo: { fontSize: 17, fontWeight: '800', color: Brand.onLight },
   modalClose: {
     width: 34,
     height: 34,
@@ -732,19 +796,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalPrecio: {
-    fontSize: 14,
-    color: Brand.primary,
-    fontWeight: '700',
-  },
-  modalCampo: {
-    gap: 6,
-  },
-  modalLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Brand.onLightMuted,
-  },
+  modalPrecio: { fontSize: 14, color: Brand.primary, fontWeight: '700' },
+  modalCampo: { gap: 6 },
+  modalLabel: { fontSize: 12, fontWeight: '700', color: Brand.onLightMuted },
   modalInput: {
     borderWidth: 1.5,
     borderColor: '#E2E8E7',
@@ -755,20 +809,6 @@ const styles = StyleSheet.create({
     color: Brand.onLight,
     backgroundColor: '#F8FAFA',
   },
-  notaWrap: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 7,
-    backgroundColor: Brand.primary + '12',
-    borderRadius: 10,
-    padding: 10,
-  },
-  notaText: {
-    flex: 1,
-    fontSize: 12,
-    color: Brand.primaryDark,
-    lineHeight: 17,
-  },
   comprarBtn: {
     backgroundColor: Brand.primary,
     borderRadius: 14,
@@ -776,77 +816,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  comprarBtnText: {
-    color: Brand.white,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  modalRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  // Tarjeta visual
-  tarjetaVisual: {
-    backgroundColor: Brand.primaryDark,
-    borderRadius: 16,
-    padding: 18,
-    gap: 10,
-  },
-  tarjetaChip: {
-    alignSelf: 'flex-start',
-  },
-  tarjetaNumVisual: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: Brand.white,
-    letterSpacing: 2,
-  },
-  tarjetaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  tarjetaSubLabel: {
-    fontSize: 9,
-    color: Brand.onDarkMuted,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
-  tarjetaSubVal: {
-    fontSize: 13,
-    color: Brand.white,
-    fontWeight: '600',
-  },
-  seguridadWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    justifyContent: 'center',
-  },
-  seguridadText: {
-    fontSize: 11,
-    color: Brand.onLightMuted,
-  },
-  // Procesando
-  procesandoWrap: {
-    alignItems: 'center',
-    paddingVertical: 32,
-    gap: 14,
-  },
-  procesandoTitulo: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Brand.onLight,
-  },
-  procesandoSub: {
-    fontSize: 13,
-    color: Brand.onLightMuted,
-  },
-  // Éxito
-  exitoWrap: {
-    alignItems: 'center',
-    paddingVertical: 16,
-    gap: 12,
-  },
+  comprarBtnText: { color: Brand.white, fontSize: 16, fontWeight: '700' },
+
+  // --- PAGO Y TARJETA ---
+  tarjetaVisual: { backgroundColor: Brand.primaryDark, borderRadius: 16, padding: 18, gap: 10 },
+  tarjetaChip: { alignSelf: 'flex-start' },
+  tarjetaNumVisual: { fontSize: 17, fontWeight: '700', color: Brand.white, letterSpacing: 2 },
+  tarjetaRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  tarjetaSubLabel: { fontSize: 9, color: Brand.onDarkMuted, fontWeight: '700', letterSpacing: 1 },
+  tarjetaSubVal: { fontSize: 13, color: Brand.white, fontWeight: '600' },
+  modalRow: { flexDirection: 'row', gap: 10 },
+  seguridadWrap: { flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center' },
+  seguridadText: { fontSize: 11, color: Brand.onLightMuted },
+
+  // --- PROCESAMIENTO Y ÉXITO ---
+  procesandoWrap: { alignItems: 'center', paddingVertical: 32, gap: 14 },
+  procesandoTitulo: { fontSize: 18, fontWeight: '700', color: Brand.onLight },
+  procesandoSub: { fontSize: 13, color: Brand.onLightMuted },
+  exitoWrap: { alignItems: 'center', paddingVertical: 16, gap: 12 },
   exitoIcono: {
     width: 72,
     height: 72,
@@ -855,15 +842,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  exitoTitulo: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: Brand.onLight,
-  },
-  exitoSub: {
-    fontSize: 14,
-    color: Brand.onLightMuted,
-    textAlign: 'center',
-    lineHeight: 21,
-  },
+  exitoTitulo: { fontSize: 22, fontWeight: '800', color: Brand.onLight },
+  exitoSub: { fontSize: 14, color: Brand.onLightMuted, textAlign: 'center', lineHeight: 21 },
 });

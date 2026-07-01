@@ -1,3 +1,7 @@
+
+
+
+
 import { Ionicons } from '@expo/vector-icons';
 import {
   createUserWithEmailAndPassword,
