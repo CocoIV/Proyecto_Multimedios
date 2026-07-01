@@ -5,6 +5,9 @@ import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import 'react-native-reanimated';
 
+// Importamos la función de configuración desde tu nueva clase centralizada
+import { configurarPermisosNotificaciones } from '@/utils/notificaciones';
+
 import { Brand } from '@/constants/brand';
 import { AuthProvider, useAuth } from '@/context/auth';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -37,8 +40,15 @@ function useProtectedRoute() {
 
 function RootNavigator() {
   const colorScheme = useColorScheme();
-  const { loading } = useAuth();
+  const { loading, user } = useAuth();
   useProtectedRoute();
+
+  // Llamamos a la configuración centralizada al iniciar sesión
+  useEffect(() => {
+    if (user) {
+      configurarPermisosNotificaciones();
+    }
+  }, [user]);
 
   if (loading) {
     return (

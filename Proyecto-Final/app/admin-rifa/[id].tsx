@@ -22,6 +22,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+//Importamos tu clase notificacion
+import { enviarNotificacion } from '@/utils/notificaciones'; 
+
 import { db } from '@/config/firebase';
 import { Brand } from '@/constants/brand';
 import { useAuth } from '@/context/auth';
@@ -164,6 +167,13 @@ export default function AdminRifaScreen() {
       });
       setGanador(ganadorElegido);
       setGanadorModal(true);
+
+      //Llamada a la clase de notificaciones
+      await enviarNotificacion(
+        "¡Tenemos Ganador!",
+        `El número #${ganadorElegido.numero} es el ganador de la rifa "${rifa.titulo}"`
+      );
+
     } catch {
       alerta('Error', 'No se pudo registrar el ganador.');
     } finally {

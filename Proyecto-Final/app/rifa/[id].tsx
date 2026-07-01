@@ -25,6 +25,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+//  Importamos tu clase notificacion
+import { enviarNotificacion } from '@/utils/notificaciones'; 
+
 import { db } from '@/config/firebase';
 import { Brand } from '@/constants/brand';
 import { useAuth } from '@/context/auth';
@@ -166,6 +169,12 @@ export default function RifaDetailScreen() {
 
         tx.update(rifaRef, { vendidos: (rifaSnap.data().vendidos ?? 0) + 1 });
       });
+
+      //llamada a la  clase de notificaciones
+      await enviarNotificacion(
+        "¡Número Adquirido!", 
+        `El número #${numeroSeleccionado} para la rifa "${rifa?.titulo}" es tuyo. ¡Buena suerte!`
+      );
 
       setPaso(4);
     } catch (e: any) {

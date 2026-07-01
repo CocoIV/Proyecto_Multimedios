@@ -16,6 +16,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+//Importamos tu clase centralizada utils/notificaciones.ts
+import { enviarNotificacion } from '@/utils/notificaciones'; 
+
 import { db } from '@/config/firebase';
 import { Brand } from '@/constants/brand';
 import { useAuth } from '@/context/auth';
@@ -64,6 +67,13 @@ export default function CrearRifaScreen() {
         creado_por_uid: user?.uid ?? '',
         creado_por_nombre: perfil?.nombre ?? user?.displayName ?? '',
       });
+
+      //Llamada limpia a tu clase de notificaciones
+      await enviarNotificacion(
+        "¡Nueva Rifa Creada!",
+        `La rifa "${titulo.trim()}" ya está disponible para el público.`
+      );
+
       if (Platform.OS === 'web') {
         window.alert(`¡Rifa creada! "${titulo.trim()}" ya está disponible.`);
         router.back();
