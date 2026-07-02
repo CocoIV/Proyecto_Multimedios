@@ -21,21 +21,32 @@ export const unstable_settings = {
  * sin sesión -> /login, con sesión -> app (tabs).
  */
 function useProtectedRoute() {
-  const { user, loading } = useAuth();
+  const { user, perfil, loading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
     if (loading) return;
 
+    const rutasPublicas = ['login', 'recuperar', 'verificar'];
+    const enPublica = rutasPublicas.includes(segments[0]);
     const enLogin = segments[0] === 'login';
+    const enOnboarding = segments[0] === 'onboarding';
 
-    if (!user && !enLogin) {
-      router.replace('/login');
-    } else if (user && enLogin) {
+    if (!user) {
+      if (!enPublica) router.replace('/login');
+      return;
+    }
+
+    // Con sesión: si el perfil aún no completó el onboarding, lo mandamos ahí.
+    const necesitaOnboarding = perfil ? perfil.onboarding_completo !== true : false;
+
+    if (necesitaOnboarding && !enOnboarding) {
+      router.replace('/onboarding');
+    } else if (!necesitaOnboarding && (enLogin || enOnboarding)) {
       router.replace('/(tabs)');
     }
-  }, [user, loading, segments, router]);
+  }, [user, perfil, loading, segments, router]);
 }
 
 function RootNavigator() {
@@ -68,10 +79,17 @@ function RootNavigator() {
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <Stack>
         <Stack.Screen name="login" options={{ headerShown: false }} />
+        <Stack.Screen name="recuperar" options={{ headerShown: false }} />
+        <Stack.Screen name="verificar" options={{ headerShown: false }} />
+        <Stack.Screen name="onboarding" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="crear-rifa" options={{ headerShown: false }} />
+        <Stack.Screen name="mis-rifas" options={{ headerShown: false }} />
         <Stack.Screen name="rifa/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="admin-rifa/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="boleto/[rifa]/[numero]" options={{ headerShown: false }} />
+        <Stack.Screen name="ganador/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="premio/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="resultados" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>

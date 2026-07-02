@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import {
   collection,
   doc,
@@ -7,6 +8,7 @@ import {
   runTransaction,
   serverTimestamp,
 } from 'firebase/firestore';
+import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -28,12 +30,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { enviarNotificacion } from '@/utils/notificaciones'; 
 
 import { db } from '@/config/firebase';
-import { Brand } from '@/constants/brand';
+import { AppInfo, Brand } from '@/constants/brand';
 import { useAuth } from '@/context/auth';
 import type { NumeroDoc, Rifa } from '@/types/rifa';
 
 type NumeroConId = NumeroDoc & { numero: string };
 type EstadoNumero = 'libre' | 'mio' | 'ocupado';
+type Paso = 'datos' | 'metodo' | 'tarjeta' | 'sinpe' | 'procesando' | 'exito';
+
+// Número SINPE Móvil de la organización (demo).
+const SINPE_NUMERO = '8888 - 7777';
 
 // --- NUEVA FUNCIÓN: Notificación remota al creador con lógica de "Rifa Llena" ---
 async function procesarNotificacionAlCreador(rifaId: string, numeroComprado: string) {
@@ -114,12 +120,13 @@ export default function RifaDetailScreen() {
   const [compradorNombre, setCompradorNombre] = useState('');
   const [compradorTelefono, setCompradorTelefono] = useState('');
   const [comprando, setComprando] = useState(false);
-  // Pago simulado
-  const [paso, setPaso] = useState<1 | 2 | 3 | 4>(1); // 1=datos, 2=tarjeta, 3=procesando, 4=éxito
+  // Pago simulado. Pasos: datos → metodo → (tarjeta | sinpe) → procesando → exito
+  const [paso, setPaso] = useState<Paso>('datos');
   const [tarjetaNum, setTarjetaNum] = useState('');
   const [tarjetaExp, setTarjetaExp] = useState('');
   const [tarjetaCvv, setTarjetaCvv] = useState('');
   const [tarjetaNombre, setTarjetaNombre] = useState('');
+  const [capturaSinpe, setCapturaSinpe] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -155,8 +162,9 @@ export default function RifaDetailScreen() {
     if (rifa?.estado !== 'activa') return;
     if (estadoNumero(n) !== 'libre') return;
     setNumeroSeleccionado(n);
-    setPaso(1);
+    setPaso('datos');
     setTarjetaNum(''); setTarjetaExp(''); setTarjetaCvv(''); setTarjetaNombre('');
+    setCapturaSinpe(null);
     setModalVisible(true);
   }
 
@@ -174,7 +182,17 @@ export default function RifaDetailScreen() {
       if (Platform.OS === 'web') { window.alert('Ingresá tu teléfono.'); return; }
       Alert.alert('Falta teléfono', 'Ingresá tu número de teléfono.'); return;
     }
-    setPaso(2);
+    setPaso('metodo');
+  }
+
+  async function elegirCaptura() {
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.6,
+    });
+    if (!res.canceled && res.assets?.[0]) {
+      setCapturaSinpe(res.assets[0].uri);
+    }
   }
 
   function formatearTarjeta(v: string) {
@@ -202,8 +220,22 @@ export default function RifaDetailScreen() {
       if (Platform.OS === 'web') { window.alert('Ingresá el CVV (3 dígitos).'); return; }
       Alert.alert('CVV inválido', 'Ingresá el CVV.'); return;
     }
+    // Tarjeta: se marca como pagado de inmediato.
+    await registrarCompra(true, 'tarjeta');
+  }
 
-    setPaso(3);
+  async function confirmarSinpe() {
+    // SINPE queda pendiente de verificación del organizador (pagado: false).
+    await registrarCompra(false, 'sinpe');
+  }
+
+  /**
+   * Reserva el número en Firestore de forma atómica.
+   * @param pagado true para tarjeta (inmediato), false para SINPE (pendiente).
+   * @param volverA paso al que regresar si algo falla.
+   */
+  async function registrarCompra(pagado: boolean, volverA: Paso) {
+    setPaso('procesando');
     setComprando(true);
 
     // Simular procesamiento de 2.5 segundos
@@ -225,26 +257,24 @@ export default function RifaDetailScreen() {
           comprador_nombre: compradorNombre.trim(),
           comprador_telefono: compradorTelefono.trim(),
           comprado_en: serverTimestamp(),
-          pagado: true,
+          pagado,
           rifa_titulo: rifa?.titulo ?? '',
         });
 
         tx.update(rifaRef, { vendidos: (rifaSnap.data().vendidos ?? 0) + 1 });
       });
 
-      // Llamada a la clase de notificaciones local para el comprador
-      await enviarNotificacion(
-        "Numero Adquirido", 
+      setPaso('exito');
+
+      enviarNotificacion(
+        "Numero Adquirido",
         `El numero #${numeroSeleccionado} para la rifa "${rifa?.titulo}" es tuyo. Buena suerte`
-      );
+      ).catch(() => {});
 
-      // LLAMADA NUEVA: Notificacion remota para el creador de la rifa (ejecutada en segundo plano)
       procesarNotificacionAlCreador(id!, String(numeroSeleccionado));
-
-      setPaso(4);
     } catch (e: any) {
       setComprando(false);
-      setPaso(2);
+      setPaso(volverA);
       const msg = e.message === 'ocupado'
         ? 'Alguien acaba de comprar ese número. Elegí otro.'
         : 'No se pudo procesar el pago. Intentá de nuevo.';
@@ -275,6 +305,8 @@ export default function RifaDetailScreen() {
   const numeros = Array.from({ length: rifa.total_numeros }, (_, i) => i + 1);
   const esActiva = rifa.estado === 'activa';
   const esAdmin = perfil?.rol === 'admin';
+  const esCreador = rifa.creado_por_uid === user?.uid;
+  const puedeGestionar = esAdmin || esCreador;
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -284,7 +316,13 @@ export default function RifaDetailScreen() {
           <Ionicons name="arrow-back" size={22} color={Brand.onLight} />
         </Pressable>
         <Text style={styles.navTitulo} numberOfLines={1}>{rifa.titulo}</Text>
-        <View style={{ width: 40 }} />
+        {puedeGestionar ? (
+          <Pressable onPress={() => router.push(`/admin-rifa/${rifa.id}` as any)} style={styles.backBtn}>
+            <Ionicons name="settings-outline" size={20} color={Brand.primary} />
+          </Pressable>
+        ) : (
+          <View style={{ width: 40 }} />
+        )}
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -409,7 +447,7 @@ export default function RifaDetailScreen() {
           <View style={[styles.modalCard, { paddingBottom: insets.bottom + 16 }]}>
 
             {/* PASO 1: Datos personales */}
-            {paso === 1 && (
+            {paso === 'datos' && (
               <>
                 <View style={styles.modalHeader}>
                   <Text style={styles.modalTitulo}>Numero #{numeroSeleccionado}</Text>
@@ -417,7 +455,7 @@ export default function RifaDetailScreen() {
                     <Ionicons name="close" size={20} color={Brand.onLightMuted} />
                   </Pressable>
                 </View>
-                <Text style={styles.modalPrecio}>₡{(rifa.precio ?? 0).toLocaleString('es-CR')} · Pago con tarjeta</Text>
+                <Text style={styles.modalPrecio}>₡{(rifa.precio ?? 0).toLocaleString('es-CR')} · Tarjeta o SINPE Móvil</Text>
                 <View style={styles.modalCampo}>
                   <Text style={styles.modalLabel}>Nombre completo</Text>
                   <TextInput style={styles.modalInput} value={compradorNombre} onChangeText={setCompradorNombre}
@@ -435,11 +473,53 @@ export default function RifaDetailScreen() {
               </>
             )}
 
-            {/* PASO 2: Datos de tarjeta */}
-            {paso === 2 && (
+            {/* PASO: Método de pago */}
+            {paso === 'metodo' && (
               <>
                 <View style={styles.modalHeader}>
-                  <Pressable onPress={() => setPaso(1)} style={styles.modalClose}>
+                  <Pressable onPress={() => setPaso('datos')} style={styles.modalClose}>
+                    <Ionicons name="arrow-back" size={20} color={Brand.onLightMuted} />
+                  </Pressable>
+                  <Text style={styles.modalTitulo}>Método de pago</Text>
+                  <Pressable onPress={cerrarModal} style={styles.modalClose}>
+                    <Ionicons name="close" size={20} color={Brand.onLightMuted} />
+                  </Pressable>
+                </View>
+                <Text style={styles.modalPrecio}>¿Cómo querés pagar?</Text>
+
+                <Pressable
+                  style={({ pressed }) => [styles.metodoOpcion, pressed && { opacity: 0.9 }]}
+                  onPress={() => setPaso('tarjeta')}>
+                  <View style={[styles.metodoIcono, { backgroundColor: Brand.primary + '18' }]}>
+                    <Ionicons name="card" size={22} color={Brand.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.metodoTitulo}>Tarjeta de Crédito / Débito</Text>
+                    <Text style={styles.metodoSub}>Visa, Mastercard · débito nacional</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={Brand.onLightMuted} />
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [styles.metodoOpcion, pressed && { opacity: 0.9 }]}
+                  onPress={() => setPaso('sinpe')}>
+                  <View style={[styles.metodoIcono, { backgroundColor: Brand.accent + '22' }]}>
+                    <Ionicons name="phone-portrait" size={22} color={Brand.accentText} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.metodoTitulo}>SINPE Móvil</Text>
+                    <Text style={styles.metodoSub}>Transferencia y captura del comprobante</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={Brand.onLightMuted} />
+                </Pressable>
+              </>
+            )}
+
+            {/* PASO 2: Datos de tarjeta */}
+            {paso === 'tarjeta' && (
+              <>
+                <View style={styles.modalHeader}>
+                  <Pressable onPress={() => setPaso('metodo')} style={styles.modalClose}>
                     <Ionicons name="arrow-back" size={20} color={Brand.onLightMuted} />
                   </Pressable>
                   <Text style={styles.modalTitulo}>Datos de pago</Text>
@@ -509,8 +589,56 @@ export default function RifaDetailScreen() {
               </>
             )}
 
+            {/* PASO: Pago por SINPE Móvil */}
+            {paso === 'sinpe' && (
+              <>
+                <View style={styles.modalHeader}>
+                  <Pressable onPress={() => setPaso('metodo')} style={styles.modalClose}>
+                    <Ionicons name="arrow-back" size={20} color={Brand.onLightMuted} />
+                  </Pressable>
+                  <Text style={styles.modalTitulo}>Pago por SINPE Móvil</Text>
+                  <Pressable onPress={cerrarModal} style={styles.modalClose}>
+                    <Ionicons name="close" size={20} color={Brand.onLightMuted} />
+                  </Pressable>
+                </View>
+
+                {/* Datos de transferencia */}
+                <View style={styles.sinpeCard}>
+                  <Text style={styles.sinpeLabel}>Realizá tu transferencia a:</Text>
+                  <Text style={styles.sinpeNumero}>{SINPE_NUMERO}</Text>
+                  <Text style={styles.sinpeOrg}>{AppInfo.name} · {AppInfo.region}</Text>
+                  <Text style={styles.sinpeMonto}>Monto exacto: ₡{(rifa.precio ?? 0).toLocaleString('es-CR')}</Text>
+                </View>
+
+                <Text style={styles.modalLabel}>Subí la captura de la transferencia</Text>
+                <Pressable style={styles.uploadBox} onPress={elegirCaptura}>
+                  {capturaSinpe ? (
+                    <Image source={{ uri: capturaSinpe }} style={styles.uploadPreview} contentFit="cover" />
+                  ) : (
+                    <View style={styles.uploadVacio}>
+                      <Ionicons name="cloud-upload-outline" size={26} color={Brand.onLightMuted} />
+                      <Text style={styles.uploadText}>Tocá para subir imagen</Text>
+                      <Text style={styles.uploadHint}>PNG, JPG · Máx. 5MB</Text>
+                    </View>
+                  )}
+                </Pressable>
+                {capturaSinpe && (
+                  <Pressable onPress={elegirCaptura} style={styles.cambiarWrap}>
+                    <Ionicons name="repeat" size={13} color={Brand.primary} />
+                    <Text style={styles.cambiarText}>Cambiar imagen</Text>
+                  </Pressable>
+                )}
+
+                <Text style={styles.sinpeNota}>Tu pago será verificado en menos de 2 horas hábiles.</Text>
+
+                <Pressable style={({ pressed }) => [styles.comprarBtn, pressed && { opacity: 0.88 }]} onPress={confirmarSinpe}>
+                  <Text style={styles.comprarBtnText}>Confirmar Pago SINPE</Text>
+                </Pressable>
+              </>
+            )}
+
             {/* PASO 3: Procesando */}
-            {paso === 3 && (
+            {paso === 'procesando' && (
               <View style={styles.procesandoWrap}>
                 <ActivityIndicator size="large" color={Brand.primary} />
                 <Text style={styles.procesandoTitulo}>Procesando pago…</Text>
@@ -519,12 +647,12 @@ export default function RifaDetailScreen() {
             )}
 
             {/* PASO 4: Éxito */}
-            {paso === 4 && (
+            {paso === 'exito' && (
               <View style={styles.exitoWrap}>
                 <View style={styles.exitoIcono}>
                   <Ionicons name="checkmark" size={40} color={Brand.white} />
                 </View>
-                <Text style={styles.exitoTitulo}>Pago confirmado</Text>
+                <Text style={styles.exitoTitulo}>¡Boleto reservado!</Text>
                 <Text style={styles.exitoSub}>
                   El numero <Text style={{ fontWeight: '800' }}>#{numeroSeleccionado}</Text> es tuyo.{'\n'}
                   Buena suerte en el sorteo
@@ -844,4 +972,36 @@ const styles = StyleSheet.create({
   },
   exitoTitulo: { fontSize: 22, fontWeight: '800', color: Brand.onLight },
   exitoSub: { fontSize: 14, color: Brand.onLightMuted, textAlign: 'center', lineHeight: 21 },
+
+  // --- MÉTODO DE PAGO ---
+  metodoOpcion: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: Brand.white, borderRadius: 14, padding: 14,
+    borderWidth: 1.5, borderColor: '#E2E8E7',
+  },
+  metodoIcono: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  metodoTitulo: { fontSize: 15, fontWeight: '700', color: Brand.onLight },
+  metodoSub: { fontSize: 12, color: Brand.onLightMuted, marginTop: 2 },
+
+  // --- SINPE MÓVIL ---
+  sinpeCard: {
+    backgroundColor: Brand.sand, borderRadius: 16, padding: 18, alignItems: 'center', gap: 4,
+    borderWidth: 1, borderColor: Brand.accent + '30',
+  },
+  sinpeLabel: { fontSize: 13, color: Brand.onLightMuted },
+  sinpeNumero: { fontSize: 30, fontWeight: '900', color: Brand.primary, letterSpacing: 1 },
+  sinpeOrg: { fontSize: 12, color: Brand.onLightMuted },
+  sinpeMonto: { fontSize: 14, fontWeight: '800', color: Brand.red, marginTop: 4 },
+  uploadBox: {
+    height: 130, borderRadius: 16, backgroundColor: Brand.white,
+    borderWidth: 2, borderColor: '#D8DCE4', borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+  },
+  uploadVacio: { alignItems: 'center', gap: 4 },
+  uploadText: { fontSize: 14, color: Brand.onLightMuted, fontWeight: '600' },
+  uploadHint: { fontSize: 11, color: Brand.onLightMuted },
+  uploadPreview: { width: '100%', height: '100%' },
+  cambiarWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'center' },
+  cambiarText: { fontSize: 13, color: Brand.primary, fontWeight: '600' },
+  sinpeNota: { fontSize: 12, color: Brand.onLightMuted, textAlign: 'center' },
 });

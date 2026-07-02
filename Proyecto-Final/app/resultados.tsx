@@ -85,7 +85,7 @@ export default function ResultadosScreen() {
             return (
               <Pressable
                 style={({ pressed }) => [styles.card, pressed && { opacity: 0.93 }]}
-                onPress={() => router.push(`/rifa/${r.id}` as any)}>
+                onPress={() => router.push(`/ganador/${r.id}` as any)}>
 
                 {/* Header */}
                 <View style={styles.cardHeader}>

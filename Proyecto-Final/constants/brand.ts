@@ -1,42 +1,51 @@
 /**
- * Identidad visual de "Rifas Zona Sur".
- * Tema: costa del Pacífico Sur de Costa Rica (Corredores y Golfito).
- * Paleta inspirada en el Golfo Dulce (teal), el manglar (verde) y el
- * dorado de un tiquete de rifa premiado.
+ * Identidad visual de "Tombolitas CR".
+ * Rifas locales y cerca de vos — comunidad y emprendedores.
+ * Paleta: verde manglar, crema cálida, rojo "tiquete" y dorado premiado,
+ * con textos en azul-navy profundo.
  */
 
 export const Brand = {
-  // Verde-teal del Golfo Dulce
-  primary: '#0F766E',
-  primaryDark: '#0A4D4A',
-  primaryDeep: '#063A38',
+  // Verde Tombolitas
+  primary: '#1A4D3A',
+  primaryDark: '#0F3D2E',
+  primaryDeep: '#0A2E22',
+
+  // Rojo de acción — CTA principal del Figma
+  red: '#C94040',
+  redDeep: '#A83232',
 
   // Dorado "tiquete premiado"
-  accent: '#F5B301',
-  accentSoft: '#FFD66B',
+  accent: '#F59E0A',
+  accentSoft: '#FFD27A',
+  accentText: '#C97005',
 
-  // Neutros cálidos (arena)
-  sand: '#FFF7E6',
-  cream: '#FBFBF7',
+  // Neutros cálidos (crema del Figma)
+  sand: '#FFF8E7',
+  cream: '#FFF8E7',
+  inputBg: '#F8F8FA',
 
   // Texto sobre fondo oscuro
-  onDark: '#F4FBFA',
-  onDarkMuted: 'rgba(244, 251, 250, 0.72)',
+  onDark: '#F4FBF7',
+  onDarkMuted: 'rgba(244, 251, 247, 0.72)',
 
-  // Texto sobre fondo claro
-  onLight: '#10302E',
-  onLightMuted: '#5B7472',
+  // Texto sobre fondo claro (navy)
+  onLight: '#1B2B4B',
+  onLightMuted: '#5B6B85',
 
   // Estados
   success: '#2BB673',
-  danger: '#E5484D',
+  danger: '#C94040',
+
+  // Marca Google
+  google: '#EA4335',
 
   white: '#FFFFFF',
 };
 
 /** Nombre y datos de marca reutilizables en toda la app. */
 export const AppInfo = {
-  name: 'Rifas Zona Sur',
-  tagline: 'Rifas de confianza en Corredores y Golfito',
-  region: 'Pacífico Sur · Costa Rica',
+  name: 'Tombolitas CR',
+  tagline: 'TU SUERTE ESTÁ CERCA',
+  region: 'Rifas locales y cerca de vos',
 };

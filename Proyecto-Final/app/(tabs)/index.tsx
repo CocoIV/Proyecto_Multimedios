@@ -1,11 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  FlatList,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -13,359 +12,212 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { db } from '@/config/firebase';
-import { AppInfo, Brand } from '@/constants/brand';
+import { Brand } from '@/constants/brand';
 import { useAuth } from '@/context/auth';
 import type { Rifa } from '@/types/rifa';
 
-const ESTADO_LABEL: Record<string, string> = {
-  activa: 'Activa',
-  cerrada: 'Cerrada',
-  sorteada: 'Sorteada',
-};
-const ESTADO_COLOR: Record<string, string> = {
-  activa: Brand.success,
-  cerrada: Brand.onLightMuted,
-  sorteada: Brand.accent,
-};
+const PIN_COLORS = [Brand.red, Brand.primary, Brand.accent];
 
-function RifaCard({ rifa, onPress }: { rifa: Rifa; onPress: () => void }) {
-  const pct = rifa.total_numeros > 0 ? rifa.vendidos / rifa.total_numeros : 0;
-  const disponibles = rifa.total_numeros - rifa.vendidos;
-  const estadoColor = ESTADO_COLOR[rifa.estado] ?? Brand.onLightMuted;
-
-  return (
-    <Pressable
-      style={({ pressed }) => [styles.card, pressed && { opacity: 0.92 }]}
-      onPress={onPress}>
-      <View style={styles.cardHeader}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.cardTitle} numberOfLines={1}>{rifa.titulo}</Text>
-          <Text style={styles.cardPremio} numberOfLines={1}>🎁 {rifa.premio}</Text>
-        </View>
-        <View style={[styles.estadoBadge, { backgroundColor: estadoColor + '22', borderColor: estadoColor + '55' }]}>
-          <View style={[styles.estadoDot, { backgroundColor: estadoColor }]} />
-          <Text style={[styles.estadoText, { color: estadoColor }]}>{ESTADO_LABEL[rifa.estado]}</Text>
-        </View>
-      </View>
-
-      {rifa.descripcion ? (
-        <Text style={styles.cardDesc} numberOfLines={2}>{rifa.descripcion}</Text>
-      ) : null}
-
-      <View style={styles.progressWrap}>
-        <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: `${Math.round(pct * 100)}%` as any }]} />
-        </View>
-        <View style={styles.progressRow}>
-          <Text style={styles.progressText}>{rifa.vendidos} / {rifa.total_numeros} vendidos</Text>
-          <Text style={styles.disponiblesText}>{disponibles} disponibles</Text>
-        </View>
-      </View>
-
-      <View style={styles.cardFooter}>
-        <View style={styles.precioWrap}>
-          <Ionicons name="pricetag-outline" size={13} color={Brand.primary} />
-          <Text style={styles.precioText}>₡{(rifa.precio ?? 0).toLocaleString('es-CR')} / número</Text>
-        </View>
-        <View style={styles.verWrap}>
-          <Text style={styles.verText}>Ver números</Text>
-          <Ionicons name="chevron-forward" size={14} color={Brand.primary} />
-        </View>
-      </View>
-    </Pressable>
-  );
+/** Posición pseudo-aleatoria pero estable por rifa (derivada del id). */
+function posicionPin(id: string) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  const x = 8 + (h % 68);
+  const y = 16 + (Math.floor(h / 68) % 50);
+  return { x, y };
 }
 
-export default function HomeScreen() {
+export default function InicioScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, perfil } = useAuth();
+  const { perfil, user } = useAuth();
   const [rifas, setRifas] = useState<Rifa[]>([]);
-  const [cargando, setCargando] = useState(true);
-  const [filtro, setFiltro] = useState<'activa' | 'todas'>('activa');
 
   const primerNombre = (perfil?.nombre ?? user?.displayName ?? 'compañero').split(' ')[0];
-  const esAdmin = perfil?.rol === 'admin';
 
   useEffect(() => {
-    const col = collection(db, 'rifas');
-    const q = filtro === 'activa'
-      ? query(col, where('estado', '==', 'activa'), orderBy('creado_en', 'desc'))
-      : query(col, orderBy('creado_en', 'desc'));
-
-    const unsub = onSnapshot(q, (snap) => {
+    const q = query(collection(db, 'rifas'), where('estado', '==', 'activa'));
+    return onSnapshot(q, snap => {
       setRifas(snap.docs.map(d => ({ id: d.id, ...d.data() } as Rifa)));
-      setCargando(false);
-    }, () => setCargando(false));
+    }, () => {});
+  }, []);
 
-    return unsub;
-  }, [filtro]);
+  const pins = useMemo(
+    () => rifas.map((r, i) => ({
+      rifa: r,
+      color: PIN_COLORS[i % PIN_COLORS.length],
+      ...posicionPin(r.id),
+    })),
+    [rifas],
+  );
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.hello}>¡Hola, {primerNombre}!</Text>
-          <Text style={styles.sub}>{AppInfo.region}</Text>
+    <View style={styles.root}>
+      {/* ===== Mapa estilizado ===== */}
+      <View style={styles.mapa}>
+        {/* Calles horizontales */}
+        {[24, 48, 68].map(top => (
+          <View key={`h${top}`} style={[styles.calleH, { top: `${top}%` }]} />
+        ))}
+        {/* Calles verticales */}
+        {[30, 66].map(left => (
+          <View key={`v${left}`} style={[styles.calleV, { left: `${left}%` }]} />
+        ))}
+
+        {/* Ubicación del usuario (centro) */}
+        <View style={styles.userAura}>
+          <View style={styles.userAura2}>
+            <View style={styles.userDot} />
+          </View>
         </View>
-        {esAdmin && (
+
+        {/* Pins de rifas */}
+        {pins.map(({ rifa, color, x, y }) => (
           <Pressable
-            style={({ pressed }) => [styles.crearBtn, pressed && { opacity: 0.85 }]}
-            onPress={() => router.push('/crear-rifa')}>
-            <Ionicons name="add" size={18} color={Brand.white} />
-            <Text style={styles.crearText}>Nueva rifa</Text>
+            key={rifa.id}
+            style={[styles.pin, { backgroundColor: color, left: `${x}%`, top: `${y}%` }]}
+            onPress={() => router.push(`/rifa/${rifa.id}` as any)}>
+            <Text style={styles.pinText}>₡{(rifa.precio ?? 0).toLocaleString('es-CR')}</Text>
+            <View style={[styles.pinTail, { borderTopColor: color }]} />
           </Pressable>
+        ))}
+
+        {rifas.length === 0 && (
+          <View style={styles.sinRifas}>
+            <Ionicons name="map-outline" size={40} color={Brand.onLightMuted} />
+            <Text style={styles.sinRifasText}>No hay rifas activas en el mapa</Text>
+          </View>
         )}
       </View>
 
-      {/* Acceso a resultados de sorteos */}
-      <Pressable
-        style={({ pressed }) => [styles.resultadosBtn, pressed && { opacity: 0.88 }]}
-        onPress={() => router.push('/resultados' as any)}>
-        <Ionicons name="trophy-outline" size={15} color={Brand.accent} />
-        <Text style={styles.resultadosBtnText}>Ver resultados de sorteos</Text>
-        <Ionicons name="chevron-forward" size={14} color={Brand.accent} />
-      </Pressable>
-
-      <View style={styles.filtroRow}>
-        {(['activa', 'todas'] as const).map(f => (
-          <Pressable
-            key={f}
-            style={[styles.filtroBtn, filtro === f && styles.filtroActive]}
-            onPress={() => setFiltro(f)}>
-            <Text style={[styles.filtroText, filtro === f && styles.filtroTextActive]}>
-              {f === 'activa' ? 'Activas' : 'Todas'}
-            </Text>
-          </Pressable>
-        ))}
+      {/* ===== Barra de búsqueda flotante ===== */}
+      <View style={[styles.searchBar, { top: insets.top + 12 }]}>
+        <Ionicons name="search" size={18} color={Brand.onLightMuted} />
+        <Pressable style={{ flex: 1 }} onPress={() => router.push('/(tabs)/explore' as any)}>
+          <Text style={styles.searchPlaceholder}>Buscar rifas cerca de vos…</Text>
+        </Pressable>
       </View>
 
-      {cargando ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={Brand.primary} />
+      {/* Saludo flotante */}
+      <View style={[styles.saludoChip, { top: insets.top + 68 }]}>
+        <Text style={styles.saludoText}>¡Hola, {primerNombre}! 👋</Text>
+      </View>
+
+      {/* ===== Hoja inferior: rifas cerca ===== */}
+      <View style={[styles.sheet, { paddingBottom: insets.bottom + 8 }]}>
+        <View style={styles.sheetHandle} />
+        <View style={styles.sheetHeader}>
+          <Text style={styles.sheetTitulo}>Rifas cerca de vos</Text>
+          <Pressable onPress={() => router.push('/(tabs)/explore' as any)}>
+            <Text style={styles.verTodas}>Ver todas</Text>
+          </Pressable>
         </View>
-      ) : (
-        <FlatList
-          data={rifas}
-          keyExtractor={r => r.id}
-          renderItem={({ item }) => (
-            <RifaCard rifa={item} onPress={() => router.push(`/rifa/${item.id}` as any)} />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
+          {rifas.length === 0 ? (
+            <Text style={styles.sheetVacio}>Aún no hay rifas activas.</Text>
+          ) : (
+            rifas.map((r, i) => (
+              <Pressable
+                key={r.id}
+                style={styles.miniCard}
+                onPress={() => router.push(`/rifa/${r.id}` as any)}>
+                <View style={[styles.miniDot, { backgroundColor: PIN_COLORS[i % PIN_COLORS.length] }]} />
+                <Text style={styles.miniTitulo} numberOfLines={1}>{r.titulo}</Text>
+                <Text style={styles.miniPremio} numberOfLines={1}>🎁 {r.premio}</Text>
+                <Text style={styles.miniPrecio}>₡{(r.precio ?? 0).toLocaleString('es-CR')} / número</Text>
+              </Pressable>
+            ))
           )}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Ionicons name="ticket-outline" size={48} color={Brand.onLightMuted} />
-              <Text style={styles.emptyTitle}>
-                {filtro === 'activa' ? 'No hay rifas activas' : 'No hay rifas'}
-              </Text>
-              {esAdmin && (
-                <Text style={styles.emptyHint}>Creá la primera rifa con el botón de arriba</Text>
-              )}
-            </View>
-          }
-        />
-      )}
+        </ScrollView>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: Brand.cream,
+  root: { flex: 1, backgroundColor: '#E1E9E1' },
+
+  // --- Mapa ---
+  mapa: { ...StyleSheet.absoluteFillObject, backgroundColor: '#E1E9E1' },
+  calleH: { position: 'absolute', left: 0, right: 0, height: 24, backgroundColor: 'rgba(255,255,255,0.7)' },
+  calleV: { position: 'absolute', top: 0, bottom: 0, width: 22, backgroundColor: 'rgba(255,255,255,0.7)' },
+
+  userAura: {
+    position: 'absolute', left: '46%', top: '44%',
+    width: 56, height: 56, borderRadius: 28, backgroundColor: Brand.primary + '18',
+    alignItems: 'center', justifyContent: 'center',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+  userAura2: {
+    width: 34, height: 34, borderRadius: 17, backgroundColor: Brand.primary + '30',
+    alignItems: 'center', justifyContent: 'center',
   },
-  hello: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: Brand.onLight,
+  userDot: {
+    width: 16, height: 16, borderRadius: 8, backgroundColor: Brand.primary,
+    borderWidth: 3, borderColor: Brand.white,
   },
-  sub: {
-    fontSize: 12,
-    color: Brand.onLightMuted,
-    marginTop: 2,
+
+  pin: {
+    position: 'absolute',
+    paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: Brand.onLight, shadowOpacity: 0.3, shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 }, elevation: 5,
   },
-  crearBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: Brand.primary,
-    paddingVertical: 9,
-    paddingHorizontal: 14,
-    borderRadius: 12,
+  pinText: { color: Brand.white, fontWeight: '800', fontSize: 12 },
+  pinTail: {
+    position: 'absolute', bottom: -6, alignSelf: 'center',
+    width: 0, height: 0,
+    borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 8,
+    borderLeftColor: 'transparent', borderRightColor: 'transparent',
   },
-  crearText: {
-    color: Brand.white,
-    fontWeight: '700',
-    fontSize: 13,
+  sinRifas: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center', justifyContent: 'center', gap: 10,
   },
-  filtroRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 20,
-    marginBottom: 12,
+  sinRifasText: { fontSize: 14, color: Brand.onLightMuted, fontWeight: '600' },
+
+  // --- Search flotante ---
+  searchBar: {
+    position: 'absolute', left: 16, right: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: Brand.white, borderRadius: 16, paddingHorizontal: 14, height: 48,
+    shadowColor: Brand.onLight, shadowOpacity: 0.15, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 6,
   },
-  filtroBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    backgroundColor: '#EAF1F0',
+  searchPlaceholder: { fontSize: 14, color: Brand.onLight + '59' },
+
+  saludoChip: {
+    position: 'absolute', left: 16,
+    backgroundColor: Brand.primary, borderRadius: 20,
+    paddingVertical: 6, paddingHorizontal: 14,
+    shadowColor: Brand.primaryDeep, shadowOpacity: 0.25, shadowRadius: 8, elevation: 4,
   },
-  filtroActive: {
-    backgroundColor: Brand.primary,
-  },
-  filtroText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Brand.onLightMuted,
-  },
-  filtroTextActive: {
-    color: Brand.white,
-  },
-  list: {
-    paddingHorizontal: 20,
-    paddingBottom: 24,
-    gap: 14,
-  },
-  card: {
+  saludoText: { color: Brand.white, fontSize: 13, fontWeight: '700' },
+
+  // --- Hoja inferior ---
+  sheet: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
     backgroundColor: Brand.white,
-    borderRadius: 18,
-    padding: 18,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#E7EEED',
-    shadowColor: '#0A4D4A',
-    shadowOpacity: 0.07,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 5 },
-    elevation: 3,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingTop: 8, paddingHorizontal: 16,
+    shadowColor: Brand.onLight, shadowOpacity: 0.12, shadowRadius: 16,
+    shadowOffset: { width: 0, height: -4 }, elevation: 10,
   },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
+  sheetHandle: {
+    width: 54, height: 4, borderRadius: 2, backgroundColor: Brand.onLight + '26',
+    alignSelf: 'center', marginBottom: 10,
   },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: Brand.onLight,
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  sheetTitulo: { fontSize: 16, fontWeight: '800', color: Brand.onLight },
+  verTodas: { fontSize: 13, fontWeight: '700', color: Brand.primary },
+  sheetScroll: { gap: 12, paddingBottom: 10, paddingRight: 4 },
+  sheetVacio: { fontSize: 13, color: Brand.onLightMuted, paddingVertical: 16 },
+  miniCard: {
+    width: 180, backgroundColor: Brand.cream, borderRadius: 16, padding: 14, gap: 3,
+    borderWidth: 1, borderColor: Brand.onLight + '10',
   },
-  cardPremio: {
-    fontSize: 13,
-    color: Brand.onLightMuted,
-    marginTop: 2,
-  },
-  estadoBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 20,
-    borderWidth: 1,
-  },
-  estadoDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  estadoText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  cardDesc: {
-    fontSize: 13,
-    color: Brand.onLightMuted,
-    lineHeight: 19,
-  },
-  progressWrap: {
-    gap: 6,
-  },
-  progressBar: {
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: '#E7EEED',
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: Brand.primary,
-    borderRadius: 4,
-  },
-  progressRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  progressText: {
-    fontSize: 12,
-    color: Brand.onLightMuted,
-  },
-  disponiblesText: {
-    fontSize: 12,
-    color: Brand.success,
-    fontWeight: '600',
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 4,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F4F3',
-  },
-  precioWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  precioText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: Brand.primary,
-  },
-  verWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  verText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Brand.primary,
-  },
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  resultadosBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    marginHorizontal: 20, marginBottom: 10,
-    backgroundColor: Brand.accent + '18', borderRadius: 12,
-    paddingVertical: 10, paddingHorizontal: 14,
-    borderWidth: 1, borderColor: Brand.accent + '40',
-  },
-  resultadosBtnText: { flex: 1, fontSize: 13, fontWeight: '700', color: '#B07D00' },
-  empty: {
-    alignItems: 'center',
-    paddingTop: 60,
-    gap: 10,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Brand.onLightMuted,
-  },
-  emptyHint: {
-    fontSize: 13,
-    color: Brand.onLightMuted,
-    textAlign: 'center',
-  },
+  miniDot: { width: 10, height: 10, borderRadius: 5, marginBottom: 4 },
+  miniTitulo: { fontSize: 14, fontWeight: '800', color: Brand.onLight },
+  miniPremio: { fontSize: 12, color: Brand.onLightMuted },
+  miniPrecio: { fontSize: 13, fontWeight: '700', color: Brand.primary, marginTop: 4 },
 });

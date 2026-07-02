@@ -35,6 +35,18 @@
     "plugins": [
       "expo-router",
       [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Tombolitas CR usa tu ubicación para mostrarte rifas cerca de vos."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Tombolitas CR necesita acceder a tus fotos para subir la captura de tu transferencia SINPE."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",

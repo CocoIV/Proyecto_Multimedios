@@ -1,12 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
-import { collection, collectionGroup, getDocs, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import {
+  collection,
+  collectionGroup,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  orderBy,
+  query,
+  where,
+} from 'firebase/firestore';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -14,12 +23,19 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { db } from '@/config/firebase';
-import { Brand } from '@/constants/brand';
+import { AppInfo, Brand } from '@/constants/brand';
 import { useAuth } from '@/context/auth';
-import type { NumeroDoc, Rifa } from '@/types/rifa';
+import type { EstadoRifa, NumeroDoc, Rifa } from '@/types/rifa';
 
 type NumeroConId = NumeroDoc & { numero: string; rifa_id: string };
 type RifaGanada = Rifa & { miNumero: string };
+type InfoRifa = { estado: EstadoRifa; fecha_sorteo?: any };
+
+const ESTADO_BADGE: Record<EstadoRifa, { label: string; color: string }> = {
+  activa: { label: 'ACTIVO', color: Brand.success },
+  cerrada: { label: 'CERRADA', color: Brand.onLightMuted },
+  sorteada: { label: 'FINALIZADO', color: Brand.accentText },
+};
 
 export default function MisNumerosScreen() {
   const insets = useSafeAreaInsets();
@@ -27,7 +43,15 @@ export default function MisNumerosScreen() {
   const { user } = useAuth();
   const [numeros, setNumeros] = useState<NumeroConId[]>([]);
   const [rifasGanadas, setRifasGanadas] = useState<RifaGanada[]>([]);
+  const [infoRifas, setInfoRifas] = useState<Record<string, InfoRifa>>({});
   const [cargando, setCargando] = useState(true);
+  const [ahora, setAhora] = useState(Date.now());
+
+  // Tick para la cuenta regresiva.
+  useEffect(() => {
+    const t = setInterval(() => setAhora(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -46,80 +70,96 @@ export default function MisNumerosScreen() {
       setNumeros(docs);
       setCargando(false);
 
-      // Detectar rifas ganadas: rifas sorteadas donde ganador_uid == user.uid
+      // Rifas ganadas por el usuario.
       try {
         const rifasSnap = await getDocs(
           query(collection(db, 'rifas'), where('estado', '==', 'sorteada'), where('ganador_uid', '==', user.uid))
         );
-        const ganadas = rifasSnap.docs.map(d => {
+        setRifasGanadas(rifasSnap.docs.map(d => {
           const rifa = { id: d.id, ...d.data() } as Rifa;
-          const miNumero = rifa.ganador_numero ?? '';
-          return { ...rifa, miNumero };
-        });
-        setRifasGanadas(ganadas);
+          return { ...rifa, miNumero: rifa.ganador_numero ?? '' };
+        }));
       } catch { /* silencioso */ }
     }, (err) => {
-      console.error('Error en Mis Números:', err.message, err);
+      console.error('Error en Mis Boletos:', err.message, err);
       setCargando(false);
     });
 
     return unsub;
   }, [user]);
 
-  // Agrupar por rifa
-  const porRifa = numeros.reduce<Record<string, NumeroConId[]>>((acc, n) => {
-    const key = `${n.rifa_id}||${n.rifa_titulo}`;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(n);
-    return acc;
-  }, {});
+  // Info (estado + fecha de sorteo) de cada rifa comprada.
+  const idsKey = useMemo(
+    () => [...new Set(numeros.map(n => n.rifa_id))].filter(Boolean).sort().join(','),
+    [numeros],
+  );
+  useEffect(() => {
+    const ids = idsKey ? idsKey.split(',') : [];
+    if (ids.length === 0) { setInfoRifas({}); return; }
+    let activo = true;
+    Promise.all(ids.map(async id => {
+      const snap = await getDoc(doc(db, 'rifas', id));
+      return [id, snap.exists() ? (snap.data() as Rifa) : null] as const;
+    })).then(entries => {
+      if (!activo) return;
+      const map: Record<string, InfoRifa> = {};
+      entries.forEach(([id, data]) => {
+        if (data) map[id] = { estado: data.estado, fecha_sorteo: data.fecha_sorteo };
+      });
+      setInfoRifas(map);
+    });
+    return () => { activo = false; };
+  }, [idsKey]);
 
-  const grupos = Object.entries(porRifa).map(([key, nums]) => {
-    const [rifa_id, rifa_titulo] = key.split('||');
-    return { rifa_id, rifa_titulo, numeros: nums };
-  });
+  // Agrupar por rifa.
+  const grupos = useMemo(() => {
+    const porRifa = numeros.reduce<Record<string, NumeroConId[]>>((acc, n) => {
+      const key = `${n.rifa_id}||${n.rifa_titulo}`;
+      (acc[key] ??= []).push(n);
+      return acc;
+    }, {});
+    return Object.entries(porRifa).map(([key, nums]) => {
+      const [rifa_id, rifa_titulo] = key.split('||');
+      return { rifa_id, rifa_titulo, numeros: nums };
+    });
+  }, [numeros]);
+
+  function cuentaRegresiva(fecha: any): string | null {
+    const d = fecha?.toDate?.();
+    if (!d) return null;
+    let diff = d.getTime() - ahora;
+    if (diff <= 0) return 'Sorteo en curso';
+    const dias = Math.floor(diff / 86400000); diff -= dias * 86400000;
+    const horas = Math.floor(diff / 3600000); diff -= horas * 3600000;
+    const mins = Math.floor(diff / 60000);
+    if (dias > 0) return `${dias}d ${horas}h ${mins}m`;
+    if (horas > 0) return `${horas}h ${mins}m`;
+    return `${mins}m`;
+  }
 
   if (cargando) {
     return (
-      <View style={[styles.root, { paddingTop: insets.top }, styles.center]}>
+      <View style={[styles.root, styles.center]}>
         <ActivityIndicator size="large" color={Brand.primary} />
       </View>
     );
   }
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <Text style={styles.titulo}>Mis Números</Text>
-        <Text style={styles.sub}>{numeros.length} número{numeros.length !== 1 ? 's' : ''} comprado{numeros.length !== 1 ? 's' : ''}</Text>
+    <View style={styles.root}>
+      {/* Header verde */}
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+        <Text style={styles.headerTitulo}>Mis Boletos</Text>
       </View>
 
-      {/* Banners de rifas ganadas */}
-      {rifasGanadas.map(r => (
-        <Pressable
-          key={r.id}
-          style={({ pressed }) => [styles.ganadoBanner, pressed && { opacity: 0.92 }]}
-          onPress={() => router.push(`/rifa/${r.id}` as any)}>
-          <View style={styles.ganadoTrofeo}>
-            <Ionicons name="trophy" size={22} color={Brand.primaryDark} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.ganadoLabel}>¡GANASTE!</Text>
-            <Text style={styles.ganadoRifa} numberOfLines={1}>{r.titulo}</Text>
-            <Text style={styles.ganadoNum}>Tu número #{r.miNumero} fue el ganador 🎉</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={Brand.primaryDark} />
-        </Pressable>
-      ))}
-
-      {grupos.length === 0 ? (
+      {grupos.length === 0 && rifasGanadas.length === 0 ? (
         <View style={styles.empty}>
-          <Ionicons name="receipt-outline" size={52} color={Brand.onLightMuted} />
-          <Text style={styles.emptyTitle}>Todavía no compraste números</Text>
+          <Ionicons name="ticket-outline" size={52} color={Brand.onLightMuted} />
+          <Text style={styles.emptyTitle}>Todavía no tenés boletos</Text>
           <Text style={styles.emptyHint}>Explorá las rifas activas y elegí tus números</Text>
           <Pressable
             style={({ pressed }) => [styles.irBtn, pressed && { opacity: 0.85 }]}
-            onPress={() => router.push('/(tabs)')}>
+            onPress={() => router.push('/(tabs)/explore' as any)}>
             <Text style={styles.irBtnText}>Ver rifas</Text>
           </Pressable>
         </View>
@@ -129,35 +169,70 @@ export default function MisNumerosScreen() {
           keyExtractor={g => g.rifa_id}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
-          renderItem={({ item: grupo }) => (
-            <Pressable
-              style={({ pressed }) => [styles.grupoCard, pressed && { opacity: 0.92 }]}
-              onPress={() => router.push(`/rifa/${grupo.rifa_id}` as any)}>
-              <View style={styles.grupoHeader}>
-                <Ionicons name="ticket" size={16} color={Brand.primary} />
-                <Text style={styles.grupoTitulo} numberOfLines={1}>{grupo.rifa_titulo}</Text>
-                <Ionicons name="chevron-forward" size={14} color={Brand.onLightMuted} />
-              </View>
-              <View style={styles.numerosWrap}>
-                {grupo.numeros.map(n => (
-                  <View
-                    key={n.numero}
-                    style={[styles.numeroBadge, n.pagado ? styles.numeroPagado : styles.numeroPendiente]}>
-                    <Text style={[styles.numeroText, n.pagado ? styles.numeroTextPagado : styles.numeroTextPendiente]}>
-                      #{n.numero}
-                    </Text>
-                  </View>
+          ListHeaderComponent={
+            rifasGanadas.length > 0 ? (
+              <View style={{ gap: 12, marginBottom: 4 }}>
+                {rifasGanadas.map(r => (
+                  <Pressable
+                    key={r.id}
+                    style={({ pressed }) => [styles.ganadoBanner, pressed && { opacity: 0.92 }]}
+                    onPress={() => router.push(`/ganador/${r.id}` as any)}>
+                    <View style={styles.ganadoTrofeo}>
+                      <Ionicons name="trophy" size={22} color={Brand.primaryDark} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.ganadoLabel}>¡GANASTE!</Text>
+                      <Text style={styles.ganadoRifa} numberOfLines={1}>{r.titulo}</Text>
+                      <Text style={styles.ganadoNum}>Tu número #{r.miNumero} fue el ganador 🎉</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={Brand.primaryDark} />
+                  </Pressable>
                 ))}
               </View>
-              <View style={styles.grupoFooter}>
-                <Text style={styles.grupoResumen}>
-                  {grupo.numeros.filter(n => n.pagado).length} pagado{grupo.numeros.filter(n => n.pagado).length !== 1 ? 's' : ''}
-                  {'  ·  '}
-                  {grupo.numeros.filter(n => !n.pagado).length} pendiente{grupo.numeros.filter(n => !n.pagado).length !== 1 ? 's' : ''}
-                </Text>
+            ) : null
+          }
+          renderItem={({ item: grupo }) => {
+            const info = infoRifas[grupo.rifa_id];
+            const estado = info?.estado ?? 'activa';
+            const badge = ESTADO_BADGE[estado];
+            const countdown = cuentaRegresiva(info?.fecha_sorteo);
+
+            return (
+              <View style={[styles.card, { borderLeftColor: badge.color }]}>
+                <View style={styles.cardTop}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cardTitulo} numberOfLines={1}>{grupo.rifa_titulo}</Text>
+
+                    <Text style={styles.numerosLinea}>
+                      Boleto{' '}
+                      {grupo.numeros.map((n, i) => (
+                        <Text
+                          key={n.numero}
+                          style={styles.numeroLink}
+                          onPress={() => router.push(`/boleto/${grupo.rifa_id}/${n.numero}` as any)}>
+                          {i > 0 ? ' · ' : ''}#{n.numero}
+                        </Text>
+                      ))}
+                    </Text>
+
+                    <Text style={styles.zona}>{AppInfo.region}</Text>
+
+                    <Text style={styles.sorteoLinea}>
+                      {estado === 'sorteada'
+                        ? 'Sorteo finalizado'
+                        : countdown
+                          ? `Sorteo en: ${countdown}`
+                          : 'Sorteo por definir'}
+                    </Text>
+                  </View>
+
+                  <View style={[styles.badge, { backgroundColor: badge.color + '1A' }]}>
+                    <Text style={[styles.badgeText, { color: badge.color }]}>{badge.label}</Text>
+                  </View>
+                </View>
               </View>
-            </Pressable>
-          )}
+            );
+          }}
         />
       )}
     </View>
@@ -165,98 +240,42 @@ export default function MisNumerosScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: Brand.cream,
-  },
-  center: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  root: { flex: 1, backgroundColor: Brand.cream },
+  center: { alignItems: 'center', justifyContent: 'center' },
+
   header: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    backgroundColor: Brand.primaryDark,
+    paddingBottom: 16, paddingHorizontal: 20,
+    alignItems: 'center', justifyContent: 'center',
   },
-  titulo: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: Brand.onLight,
-  },
-  sub: {
-    fontSize: 12,
-    color: Brand.onLightMuted,
-    marginTop: 2,
-  },
-  list: {
-    paddingHorizontal: 20,
-    paddingBottom: 24,
-    gap: 14,
-  },
-  grupoCard: {
+  headerTitulo: { fontSize: 20, fontWeight: '800', color: Brand.white },
+
+  list: { padding: 16, gap: 12, paddingBottom: 24 },
+
+  card: {
     backgroundColor: Brand.white,
-    borderRadius: 18,
+    borderRadius: 16,
     padding: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#E7EEED',
-    shadowColor: '#0A4D4A',
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+    borderLeftWidth: 5,
+    borderWidth: 1, borderColor: Brand.onLight + '0F',
+    shadowColor: Brand.onLight, shadowOpacity: 0.06, shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 }, elevation: 2,
   },
-  grupoHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  cardTitulo: { fontSize: 16, fontWeight: '800', color: Brand.onLight },
+  numerosLinea: { fontSize: 13, color: Brand.onLightMuted, marginTop: 3 },
+  numeroLink: { color: Brand.primary, fontWeight: '700' },
+  zona: { fontSize: 12, color: Brand.onLightMuted, marginTop: 3 },
+  sorteoLinea: { fontSize: 13, fontWeight: '700', color: Brand.accentText, marginTop: 6 },
+
+  badge: {
+    paddingVertical: 4, paddingHorizontal: 10, borderRadius: 20,
   },
-  grupoTitulo: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '700',
-    color: Brand.onLight,
-  },
-  numerosWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  numeroBadge: {
-    paddingVertical: 5,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: 1.5,
-  },
-  numeroPagado: {
-    backgroundColor: Brand.success + '18',
-    borderColor: Brand.success + '60',
-  },
-  numeroPendiente: {
-    backgroundColor: Brand.accent + '18',
-    borderColor: Brand.accent + '70',
-  },
-  numeroText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  numeroTextPagado: {
-    color: Brand.success,
-  },
-  numeroTextPendiente: {
-    color: '#B07D00',
-  },
-  grupoFooter: {
-    borderTopWidth: 1,
-    borderTopColor: '#F0F4F3',
-    paddingTop: 8,
-  },
-  grupoResumen: {
-    fontSize: 12,
-    color: Brand.onLightMuted,
-  },
+  badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+
+  // Banner de ganador
   ganadoBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    marginHorizontal: 20, marginBottom: 12,
     backgroundColor: Brand.accent, borderRadius: 16, padding: 14,
     shadowColor: Brand.accent, shadowOpacity: 0.3, shadowRadius: 10, elevation: 4,
   },
@@ -267,35 +286,11 @@ const styles = StyleSheet.create({
   ganadoLabel: { fontSize: 10, fontWeight: '800', color: Brand.primaryDark, letterSpacing: 1.5 },
   ganadoRifa: { fontSize: 14, fontWeight: '700', color: Brand.primaryDark, marginTop: 1 },
   ganadoNum: { fontSize: 12, color: Brand.primaryDark + 'CC', marginTop: 2 },
-  empty: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingHorizontal: 32,
-  },
-  emptyTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: Brand.onLight,
-    textAlign: 'center',
-  },
-  emptyHint: {
-    fontSize: 13,
-    color: Brand.onLightMuted,
-    textAlign: 'center',
-    lineHeight: 19,
-  },
-  irBtn: {
-    marginTop: 8,
-    backgroundColor: Brand.primary,
-    paddingVertical: 12,
-    paddingHorizontal: 28,
-    borderRadius: 14,
-  },
-  irBtnText: {
-    color: Brand.white,
-    fontWeight: '700',
-    fontSize: 15,
-  },
+
+  // Vacío
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 32 },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: Brand.onLight, textAlign: 'center' },
+  emptyHint: { fontSize: 13, color: Brand.onLightMuted, textAlign: 'center', lineHeight: 19 },
+  irBtn: { marginTop: 8, backgroundColor: Brand.primary, paddingVertical: 12, paddingHorizontal: 28, borderRadius: 14 },
+  irBtnText: { color: Brand.white, fontWeight: '700', fontSize: 15 },
 });

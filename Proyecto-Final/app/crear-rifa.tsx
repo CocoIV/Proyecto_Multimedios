@@ -37,15 +37,6 @@ export default function CrearRifaScreen() {
   const [totalNumeros, setTotalNumeros] = useState(100);
   const [guardando, setGuardando] = useState(false);
 
-  if (perfil?.rol !== 'admin') {
-    return (
-      <View style={[styles.root, { paddingTop: insets.top }, styles.center]}>
-        <Ionicons name="lock-closed-outline" size={44} color={Brand.onLightMuted} />
-        <Text style={styles.sinPermiso}>Solo los administradores pueden crear rifas.</Text>
-      </View>
-    );
-  }
-
   async function crearRifa() {
     if (!titulo.trim()) return Alert.alert('Falta el título', 'Poné un nombre a la rifa.');
     if (!premio.trim()) return Alert.alert('Falta el premio', 'Describí qué se sortea.');
@@ -68,11 +59,10 @@ export default function CrearRifaScreen() {
         creado_por_nombre: perfil?.nombre ?? user?.displayName ?? '',
       });
 
-      //Llamada limpia a tu clase de notificaciones
-      await enviarNotificacion(
+      enviarNotificacion(
         "¡Nueva Rifa Creada!",
         `La rifa "${titulo.trim()}" ya está disponible para el público.`
-      );
+      ).catch(() => {});
 
       if (Platform.OS === 'web') {
         window.alert(`¡Rifa creada! "${titulo.trim()}" ya está disponible.`);

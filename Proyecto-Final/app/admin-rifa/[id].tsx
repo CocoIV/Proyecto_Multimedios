@@ -12,6 +12,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Modal,
   Platform,
@@ -48,6 +49,18 @@ const ESTADO_COLOR: Record<EstadoRifa, string> = {
 
 function alerta(titulo: string, msg: string) {
   if (Platform.OS === 'web') { window.alert(`${titulo}\n${msg}`); return; }
+  Alert.alert(titulo, msg);
+}
+
+function confirmar(titulo: string, msg: string, onConfirm: () => void) {
+  if (Platform.OS === 'web') {
+    if (window.confirm(`${titulo}\n${msg}`)) onConfirm();
+    return;
+  }
+  Alert.alert(titulo, msg, [
+    { text: 'Cancelar', style: 'cancel' },
+    { text: 'Confirmar', style: 'destructive', onPress: onConfirm },
+  ]);
 }
 
 // --- NUEVA FUNCIÓN: Notificación remota a todos los participantes ---
@@ -113,7 +126,7 @@ export default function AdminRifaScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { perfil } = useAuth();
+  const { perfil, user } = useAuth();
 
   const [rifa, setRifa] = useState<Rifa | null>(null);
   const [numeros, setNumeros] = useState<NumeroConId[]>([]);
@@ -160,18 +173,20 @@ export default function AdminRifaScreen() {
   async function cambiarEstado(nuevoEstado: EstadoRifa) {
     if (!id || !rifa) return;
     if (nuevoEstado === rifa.estado) return;
-    const confirm = Platform.OS === 'web'
-      ? window.confirm(`¿Cambiar estado a "${ESTADO_LABEL[nuevoEstado]}"?`)
-      : true;
-    if (!confirm) return;
-    setCambiandoEstado(true);
-    try {
-      await updateDoc(doc(db, 'rifas', id), { estado: nuevoEstado });
-    } catch {
-      alerta('Error', 'No se pudo cambiar el estado.');
-    } finally {
-      setCambiandoEstado(false);
-    }
+    confirmar(
+      'Cambiar estado',
+      `¿Cambiar estado a "${ESTADO_LABEL[nuevoEstado]}"?`,
+      async () => {
+        setCambiandoEstado(true);
+        try {
+          await updateDoc(doc(db, 'rifas', id), { estado: nuevoEstado });
+        } catch {
+          alerta('Error', 'No se pudo cambiar el estado.');
+        } finally {
+          setCambiandoEstado(false);
+        }
+      }
+    );
   }
 
   async function togglePagado(numero: NumeroConId) {
@@ -192,11 +207,15 @@ export default function AdminRifaScreen() {
       alerta('Sin elegibles', 'No hay números pagados para sortear. Confirmá los pagos primero.');
       return;
     }
-    const confirm = Platform.OS === 'web'
-      ? window.confirm(`¿Realizar el sorteo ahora? Se elegirá un ganador al azar entre ${elegibles.length} número(s) pagado(s). Esta acción no se puede deshacer.`)
-      : true;
-    if (!confirm) return;
+    confirmar(
+      '¿Realizar el sorteo?',
+      `Se elegirá un ganador al azar entre ${elegibles.length} número${elegibles.length !== 1 ? 's' : ''} pagado${elegibles.length !== 1 ? 's' : ''}. Esta acción no se puede deshacer.`,
+      () => ejecutarSorteo(elegibles)
+    );
+  }
 
+  async function ejecutarSorteo(elegibles: NumeroConId[]) {
+    if (!id || !rifa) return;
     setSorteando(true);
 
     // Cuenta regresiva 3 → 2 → 1
@@ -228,14 +247,11 @@ export default function AdminRifaScreen() {
       setGanador(ganadorElegido);
       setGanadorModal(true);
 
-      // Llamada a la clase de notificaciones local para el administrador
-      await enviarNotificacion(
+      enviarNotificacion(
         "¡Tenemos Ganador!",
         `El número #${ganadorElegido.numero} es el ganador de la rifa "${rifa.titulo}"`
-      );
+      ).catch(() => {});
 
-      // LLAMADA NUEVA: Disparamos la notificación masiva a los celulares de los compradores
-      // (Lo llamamos sin 'await' para que no bloquee la interfaz gráfica del admin)
       notificarResultadosSorteo(id, rifa.titulo, ganadorElegido.numero, ganadorElegido.comprador_uid);
 
     } catch {
@@ -253,7 +269,8 @@ export default function AdminRifaScreen() {
     );
   }
 
-  if (!rifa || perfil?.rol !== 'admin') {
+  const puedeGestionar = perfil?.rol === 'admin' || rifa?.creado_por_uid === user?.uid;
+  if (!rifa || !puedeGestionar) {
     return (
       <View style={[styles.root, { paddingTop: insets.top }, styles.center]}>
         <Text style={styles.errorText}>Sin acceso.</Text>

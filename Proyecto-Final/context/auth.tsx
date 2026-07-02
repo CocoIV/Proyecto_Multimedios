@@ -31,6 +31,7 @@ export type PerfilUsuario = {
   email: string;
   telefono: string;
   rol: 'admin' | 'comprador';
+  onboarding_completo?: boolean;
   creado_en?: any;
 };
 
@@ -40,6 +41,7 @@ type AuthContextValue = {
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
+  marcarOnboardingCompleto: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -59,6 +61,7 @@ async function upsertPerfil(u: User): Promise<PerfilUsuario> {
       email: u.email ?? '',
       telefono: u.phoneNumber ?? '',
       rol: 'comprador',
+      onboarding_completo: false,
     };
     await setDoc(ref, { ...nuevo, creado_en: serverTimestamp() });
     return nuevo;
@@ -77,6 +80,7 @@ async function upsertPerfil(u: User): Promise<PerfilUsuario> {
     email: u.email ?? data.email ?? '',
     telefono: data.telefono ?? '',
     rol: (data.rol as PerfilUsuario['rol']) ?? 'comprador',
+    onboarding_completo: data.onboarding_completo ?? false,
     creado_en: data.creado_en,
   };
 }
@@ -128,8 +132,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await fbSignOut(auth);
   }
 
+  /**
+   * Marca el onboarding como completo en Firestore y, crucial, actualiza el
+   * perfil en memoria para que el guardia de rutas deje pasar (sin esto, bucle).
+   */
+  async function marcarOnboardingCompleto() {
+    if (!user) return;
+    try {
+      await setDoc(doc(db, 'usuarios', user.uid), { onboarding_completo: true }, { merge: true });
+    } catch { /* aunque falle la escritura, no bloqueamos la navegación */ }
+    setPerfil(prev => (prev ? { ...prev, onboarding_completo: true } : prev));
+  }
+
   const value = useMemo(
-    () => ({ user, perfil, loading, signInWithGoogle, signOut }),
+    () => ({ user, perfil, loading, signInWithGoogle, signOut, marcarOnboardingCompleto }),
     [user, perfil, loading]
   );
 

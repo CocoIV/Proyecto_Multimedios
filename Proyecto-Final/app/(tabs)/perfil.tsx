@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { sendPasswordResetEmail, updateProfile } from 'firebase/auth';
 import { collectionGroup, doc, getDocs, query, updateDoc, where } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
@@ -28,6 +29,7 @@ function alerta(titulo: string, msg: string) {
 
 export default function PerfilScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { user, perfil, signOut } = useAuth();
 
   // Edición de nombre
@@ -164,6 +166,35 @@ export default function PerfilScreen() {
               <StatBox icono="trophy" valor={stats?.rifas ?? 0} label="Rifas" color={Brand.accent} />
             </View>
           )}
+        </View>
+
+        {/* Organizador */}
+        <View style={styles.seccion}>
+          <Text style={styles.seccionLabel}>Organizador</Text>
+          <Pressable
+            style={({ pressed }) => [styles.campo, pressed && { backgroundColor: '#F8FAFA' }]}
+            onPress={() => router.push('/mis-rifas' as any)}>
+            <View style={[styles.campoIcono, { backgroundColor: Brand.primary + '15' }]}>
+              <Ionicons name="albums-outline" size={17} color={Brand.primary} />
+            </View>
+            <View style={styles.campoInfo}>
+              <Text style={styles.campoLabel}>Mis rifas creadas</Text>
+              <Text style={styles.campoValor}>Gestioná tus rifas y su recaudación</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={Brand.onLightMuted} />
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.campo, styles.separador, pressed && { backgroundColor: '#F8FAFA' }]}
+            onPress={() => router.push('/crear-rifa' as any)}>
+            <View style={[styles.campoIcono, { backgroundColor: Brand.accent + '20' }]}>
+              <Ionicons name="add-circle-outline" size={17} color={Brand.accentText} />
+            </View>
+            <View style={styles.campoInfo}>
+              <Text style={styles.campoLabel}>Crear rifa</Text>
+              <Text style={styles.campoValor}>Publicá una nueva rifa</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={Brand.onLightMuted} />
+          </Pressable>
         </View>
 
         {/* Información personal */}
