@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { sendPasswordResetEmail, updateProfile } from 'firebase/auth';
-import { collectionGroup, doc, getDocs, query, updateDoc, where } from 'firebase/firestore';
+import { collection, collectionGroup, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -20,7 +20,8 @@ import { auth, db } from '@/config/firebase';
 import { Brand } from '@/constants/brand';
 import { useAuth } from '@/context/auth';
 
-type Stats = { total: number; pagados: number; rifas: number };
+type Stats = { total: number; pagados: number; pendientes: number; rifas: number };
+type OrgStats = { rifas: number; vendidos: number; recaudado: number };
 
 function alerta(titulo: string, msg: string) {
   if (Platform.OS === 'web') { window.alert(`${titulo}\n${msg}`); return; }
@@ -42,8 +43,9 @@ export default function PerfilScreen() {
   const [telefono, setTelefono] = useState(perfil?.telefono ?? '');
   const [guardandoTel, setGuardandoTel] = useState(false);
 
-  // Stats
+  // Stats (se actualizan en tiempo real)
   const [stats, setStats] = useState<Stats | null>(null);
+  const [orgStats, setOrgStats] = useState<OrgStats | null>(null);
   const [cargandoStats, setCargandoStats] = useState(true);
 
   const iniciales = (perfil?.nombre ?? user?.displayName ?? '?')
@@ -60,17 +62,41 @@ export default function PerfilScreen() {
     if (perfil?.telefono && !editandoTel) setTelefono(perfil.telefono);
   }, [perfil]);
 
-  // Cargar estadísticas
+  // Estadísticas del comprador en tiempo real (números que compré)
   useEffect(() => {
     if (!user) return;
-    getDocs(query(collectionGroup(db, 'numeros'), where('comprador_uid', '==', user.uid)))
-      .then(snap => {
-        const pagados = snap.docs.filter(d => d.data().pagado).length;
-        const rifasSet = new Set(snap.docs.map(d => d.ref.parent.parent?.id).filter(Boolean));
-        setStats({ total: snap.size, pagados, rifas: rifasSet.size });
-      })
-      .catch(() => setStats({ total: 0, pagados: 0, rifas: 0 }))
-      .finally(() => setCargandoStats(false));
+    const q = query(collectionGroup(db, 'numeros'), where('comprador_uid', '==', user.uid));
+    const unsub = onSnapshot(q, snap => {
+      let pagados = 0;
+      const rifasSet = new Set<string>();
+      snap.docs.forEach(d => {
+        if (d.data().pagado) pagados++;
+        const rid = d.ref.parent.parent?.id;
+        if (rid) rifasSet.add(rid);
+      });
+      setStats({ total: snap.size, pagados, pendientes: snap.size - pagados, rifas: rifasSet.size });
+      setCargandoStats(false);
+    }, () => {
+      setStats({ total: 0, pagados: 0, pendientes: 0, rifas: 0 });
+      setCargandoStats(false);
+    });
+    return unsub;
+  }, [user]);
+
+  // Estadísticas del organizador en tiempo real (rifas que creé)
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'rifas'), where('creado_por_uid', '==', user.uid));
+    const unsub = onSnapshot(q, snap => {
+      let vendidos = 0, recaudado = 0;
+      snap.docs.forEach(d => {
+        const r = d.data();
+        vendidos += r.vendidos ?? 0;
+        recaudado += (r.vendidos ?? 0) * (r.precio ?? 0);
+      });
+      setOrgStats({ rifas: snap.size, vendidos, recaudado });
+    }, () => setOrgStats({ rifas: 0, vendidos: 0, recaudado: 0 }));
+    return unsub;
   }, [user]);
 
   async function guardarNombre() {
@@ -152,21 +178,45 @@ export default function PerfilScreen() {
           </View>
         </View>
 
-        {/* Estadísticas */}
+        {/* Estadísticas del comprador */}
         <View style={styles.seccion}>
-          <Text style={styles.seccionLabel}>Mis estadísticas</Text>
+          <Text style={styles.seccionLabel}>Mi actividad</Text>
           {cargandoStats ? (
             <View style={styles.statsLoading}>
               <ActivityIndicator size="small" color={Brand.primary} />
             </View>
           ) : (
-            <View style={styles.statsRow}>
+            <View style={styles.statsGrid}>
               <StatBox icono="ticket" valor={stats?.total ?? 0} label="Números comprados" color={Brand.primary} />
               <StatBox icono="checkmark-circle" valor={stats?.pagados ?? 0} label="Pagados" color={Brand.success} />
-              <StatBox icono="trophy" valor={stats?.rifas ?? 0} label="Rifas" color={Brand.accent} />
+              <StatBox icono="time-outline" valor={stats?.pendientes ?? 0} label="Pendientes" color={Brand.accentText} />
+              <StatBox icono="apps" valor={stats?.rifas ?? 0} label="Rifas jugadas" color={Brand.accent} />
             </View>
           )}
         </View>
+
+        {/* Estadísticas del organizador (solo si creó rifas) */}
+        {orgStats && orgStats.rifas > 0 && (
+          <View style={styles.orgCard}>
+            <View style={styles.orgTop}>
+              <Ionicons name="stats-chart" size={16} color={Brand.accent} />
+              <Text style={styles.orgLabel}>COMO ORGANIZADOR</Text>
+            </View>
+            <Text style={styles.orgRecaudado}>₡{orgStats.recaudado.toLocaleString('es-CR')}</Text>
+            <Text style={styles.orgRecaudadoLabel}>recaudado en total</Text>
+            <View style={styles.orgFooter}>
+              <View style={styles.orgFooterItem}>
+                <Text style={styles.orgFooterValor}>{orgStats.rifas}</Text>
+                <Text style={styles.orgFooterLabel}>rifas creadas</Text>
+              </View>
+              <View style={styles.orgFooterDiv} />
+              <View style={styles.orgFooterItem}>
+                <Text style={styles.orgFooterValor}>{orgStats.vendidos}</Text>
+                <Text style={styles.orgFooterLabel}>boletos vendidos</Text>
+              </View>
+            </View>
+          </View>
+        )}
 
         {/* Organizador */}
         <View style={styles.seccion}>
@@ -382,14 +432,37 @@ const styles = StyleSheet.create({
 
   // Stats
   statsLoading: { padding: 16, alignItems: 'center' },
-  statsRow: { flexDirection: 'row', gap: 8, padding: 12 },
+  statsGrid: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    justifyContent: 'space-between', rowGap: 10,
+    padding: 12,
+  },
   statBox: {
-    flex: 1, alignItems: 'center', gap: 5, padding: 12,
+    width: '48%', alignItems: 'center', gap: 5, paddingVertical: 14, paddingHorizontal: 8,
     borderRadius: 14, borderWidth: 1, backgroundColor: Brand.white,
   },
   statIcono: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  statValor: { fontSize: 22, fontWeight: '800' },
-  statLabel: { fontSize: 10, color: Brand.onLightMuted, textAlign: 'center', fontWeight: '600' },
+  statValor: { fontSize: 24, fontWeight: '800' },
+  statLabel: { fontSize: 11, color: Brand.onLightMuted, textAlign: 'center', fontWeight: '600' },
+
+  // Tarjeta de organizador
+  orgCard: {
+    backgroundColor: Brand.primaryDark, borderRadius: 18, padding: 18, marginBottom: 14,
+    shadowColor: Brand.primaryDeep, shadowOpacity: 0.2, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 }, elevation: 5,
+  },
+  orgTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  orgLabel: { fontSize: 10, fontWeight: '800', color: Brand.onDarkMuted, letterSpacing: 0.8 },
+  orgRecaudado: { fontSize: 30, fontWeight: '900', color: Brand.accent },
+  orgRecaudadoLabel: { fontSize: 12, color: Brand.onDarkMuted, marginTop: 2 },
+  orgFooter: {
+    flexDirection: 'row', alignItems: 'center', marginTop: 16,
+    borderTopWidth: 1, borderTopColor: Brand.white + '1A', paddingTop: 14,
+  },
+  orgFooterItem: { flex: 1, alignItems: 'center', gap: 2 },
+  orgFooterDiv: { width: 1, height: 32, backgroundColor: Brand.white + '1A' },
+  orgFooterValor: { fontSize: 20, fontWeight: '900', color: Brand.white },
+  orgFooterLabel: { fontSize: 11, color: Brand.onDarkMuted },
 
   // Sección
   seccion: {

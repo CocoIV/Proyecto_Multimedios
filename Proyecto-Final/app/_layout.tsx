@@ -86,6 +86,7 @@ function RootNavigator() {
         <Stack.Screen name="crear-rifa" options={{ headerShown: false }} />
         <Stack.Screen name="mis-rifas" options={{ headerShown: false }} />
         <Stack.Screen name="rifa/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="zona/[zona]" options={{ headerShown: false }} />
         <Stack.Screen name="admin-rifa/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="boleto/[rifa]/[numero]" options={{ headerShown: false }} />
         <Stack.Screen name="ganador/[id]" options={{ headerShown: false }} />

@@ -9,6 +9,8 @@ export type Rifa = {
   premio: string;
   precio: number;
   total_numeros: number;
+  zona?: string;
+  premio_imagen?: string;
   vendidos: number;
   estado: EstadoRifa;
   fecha_sorteo?: Timestamp | null;

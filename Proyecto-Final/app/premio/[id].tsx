@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,7 +14,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { db } from '@/config/firebase';
-import { AppInfo, Brand } from '@/constants/brand';
+import { Brand } from '@/constants/brand';
+import { REGION } from '@/constants/zonas';
 import type { Rifa } from '@/types/rifa';
 
 export default function MiPremioScreen() {
@@ -22,6 +24,7 @@ export default function MiPremioScreen() {
   const router = useRouter();
 
   const [rifa, setRifa] = useState<Rifa | null>(null);
+  const [telOrg, setTelOrg] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
 
   useEffect(() => {
@@ -32,8 +35,18 @@ export default function MiPremioScreen() {
     }, () => setCargando(false));
   }, [id]);
 
+  // Traer el teléfono del organizador para que el ganador lo contacte
+  useEffect(() => {
+    const uid = rifa?.creado_por_uid;
+    if (!uid) return;
+    getDoc(doc(db, 'usuarios', uid))
+      .then(s => setTelOrg(s.exists() ? (s.data()?.telefono ?? null) : null))
+      .catch(() => {});
+  }, [rifa?.creado_por_uid]);
+
   const valor = rifa ? (rifa.precio ?? 0) * (rifa.total_numeros ?? 0) : 0;
   const watermark = rifa?.premio.match(/\d+/)?.[0] ?? '★';
+  const ubicacion = rifa?.zona ? `${rifa.zona} · ${REGION}` : REGION;
 
   function verQR() {
     if (rifa?.ganador_numero) {
@@ -66,12 +79,16 @@ export default function MiPremioScreen() {
           showsVerticalScrollIndicator={false}>
 
           {/* Hero del premio */}
-          <View style={styles.hero}>
-            <Text style={styles.heroWatermark}>{watermark}</Text>
-            <View style={styles.heroIcono}>
-              <Ionicons name="gift" size={56} color={Brand.white} />
+          {rifa.premio_imagen ? (
+            <Image source={{ uri: rifa.premio_imagen }} style={styles.heroImg} contentFit="cover" />
+          ) : (
+            <View style={styles.hero}>
+              <Text style={styles.heroWatermark}>{watermark}</Text>
+              <View style={styles.heroIcono}>
+                <Ionicons name="gift" size={56} color={Brand.white} />
+              </View>
             </View>
-          </View>
+          )}
 
           <Text style={styles.premioTitulo}>{rifa.premio || rifa.titulo}</Text>
           {valor > 0 && (
@@ -87,14 +104,13 @@ export default function MiPremioScreen() {
             <View style={styles.contactoWrap}>
               <Ionicons name="call" size={14} color={Brand.primary} />
               <Text style={styles.contacto}>
-                Organiza: {rifa.creado_por_nombre || 'Tombolitas CR'} · {AppInfo.region}
+                {telOrg ? `Tel: ${telOrg} · ${ubicacion}` : `Organiza: ${rifa.creado_por_nombre || 'Tombolitas CR'} · ${ubicacion}`}
               </Text>
             </View>
           </View>
 
           {/* Botón QR */}
           <Pressable style={({ pressed }) => [styles.btnQR, pressed && { opacity: 0.9 }]} onPress={verQR}>
-            <Ionicons name="qr-code" size={18} color={Brand.white} />
             <Text style={styles.btnQRText}>QR</Text>
           </Pressable>
         </ScrollView>
@@ -126,6 +142,7 @@ const styles = StyleSheet.create({
     backgroundColor: Brand.primaryDeep,
     alignItems: 'center', justifyContent: 'center',
   },
+  heroImg: { height: 210, borderRadius: 20, width: '100%' },
   heroWatermark: {
     position: 'absolute', fontSize: 160, fontWeight: '900',
     color: Brand.white + '14', letterSpacing: 4,

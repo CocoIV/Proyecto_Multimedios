@@ -10,10 +10,12 @@ import {
 } from 'firebase/firestore';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -24,13 +26,15 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import QRCode from 'react-native-qrcode-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Importamos tu clase notificacion
-import { enviarNotificacion } from '@/utils/notificaciones'; 
+import { enviarNotificacion } from '@/utils/notificaciones';
 
 import { db } from '@/config/firebase';
 import { AppInfo, Brand } from '@/constants/brand';
+import { REGION } from '@/constants/zonas';
 import { useAuth } from '@/context/auth';
 import type { NumeroDoc, Rifa } from '@/types/rifa';
 
@@ -42,15 +46,15 @@ type Paso = 'datos' | 'metodo' | 'tarjeta' | 'sinpe' | 'procesando' | 'exito';
 const SINPE_NUMERO = '8888 - 7777';
 
 // --- NUEVA FUNCIÓN: Notificación remota al creador con lógica de "Rifa Llena" ---
-async function procesarNotificacionAlCreador(rifaId: string, numeroComprado: string) {
+async function procesarNotificacionAlCreador(rifaId: string, numerosComprados: number[]) {
   try {
     const rifaRef = doc(db, 'rifas', rifaId);
     const rifaSnap = await getDoc(rifaRef);
-    
+
     if (!rifaSnap.exists()) return;
-    
+
     const datosRifa = rifaSnap.data();
-    const creadorUid = datosRifa?.creador_uid;
+    const creadorUid = datosRifa?.creador_uid ?? datosRifa?.creado_por_uid;
     const tituloRifa = datosRifa?.titulo ?? 'tu rifa';
     const totalNumeros = datosRifa?.total_numeros ?? 0;
     const vendidos = datosRifa?.vendidos ?? 0;
@@ -70,9 +74,12 @@ async function procesarNotificacionAlCreador(rifaId: string, numeroComprado: str
       return;
     }
 
+    const cantidad = numerosComprados.length;
+    const listaNumeros = numerosComprados.map(n => `#${n}`).join(', ');
+
     // --- LÓGICA INTELIGENTE ---
-    let tituloNotif = '¡Número Vendido! 🎟️';
-    let cuerpoNotif = `Se compró el número ${numeroComprado} en tu rifa "${tituloRifa}".`;
+    let tituloNotif = cantidad > 1 ? `¡${cantidad} Números Vendidos! 🎟️` : '¡Número Vendido! 🎟️';
+    let cuerpoNotif = `Se ${cantidad > 1 ? 'compraron los números' : 'compró el número'} ${listaNumeros} en tu rifa "${tituloRifa}".`;
 
     // Si los vendidos son iguales o mayores al total, ¡es "Sold Out"!
     if (vendidos >= totalNumeros) {
@@ -104,6 +111,20 @@ async function procesarNotificacionAlCreador(rifaId: string, numeroComprado: str
 }
 // -----------------------------------------------------
 
+/** ["#1","#2","#3"] -> "#1, #2 y #3" */
+function formatearNumeros(nums: number[]): string {
+  const arr = nums.map(n => `#${n}`);
+  if (arr.length <= 1) return arr[0] ?? '';
+  return `${arr.slice(0, -1).join(', ')} y ${arr[arr.length - 1]}`;
+}
+
+/** Fecha y hora legible para el comprobante: "27 may 2028 · 10:34 a. m." */
+function formatearFechaCompra(d: Date): string {
+  const fecha = d.toLocaleDateString('es-CR', { day: 'numeric', month: 'short', year: 'numeric' });
+  const hora = d.toLocaleTimeString('es-CR', { hour: '2-digit', minute: '2-digit' });
+  return `${fecha} · ${hora}`;
+}
+
 export default function RifaDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
@@ -114,9 +135,11 @@ export default function RifaDetailScreen() {
   const [numerosVendidos, setNumerosVendidos] = useState<NumeroConId[]>([]);
   const [cargando, setCargando] = useState(true);
 
+  // Números que el usuario va marcando en la grilla (aún sin comprar)
+  const [seleccionados, setSeleccionados] = useState<number[]>([]);
+
   // Estado del modal de compra
   const [modalVisible, setModalVisible] = useState(false);
-  const [numeroSeleccionado, setNumeroSeleccionado] = useState<number | null>(null);
   const [compradorNombre, setCompradorNombre] = useState('');
   const [compradorTelefono, setCompradorTelefono] = useState('');
   const [comprando, setComprando] = useState(false);
@@ -127,6 +150,19 @@ export default function RifaDetailScreen() {
   const [tarjetaCvv, setTarjetaCvv] = useState('');
   const [tarjetaNombre, setTarjetaNombre] = useState('');
   const [capturaSinpe, setCapturaSinpe] = useState<string | null>(null);
+  // Sub-paso animado de la pantalla "Procesando pago": 0=datos, 1=pago, 2=boleto
+  const [procesoPaso, setProcesoPaso] = useState(0);
+  // Momento exacto en que se confirmó la compra (para el comprobante)
+  const [fechaCompra, setFechaCompra] = useState<Date | null>(null);
+
+  // Avanza los pasos de la pantalla de procesamiento mientras dura la simulación
+  useEffect(() => {
+    if (paso !== 'procesando') return;
+    setProcesoPaso(0);
+    const t1 = setTimeout(() => setProcesoPaso(1), 900);
+    const t2 = setTimeout(() => setProcesoPaso(2), 1800);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [paso]);
 
   useEffect(() => {
     if (!id) return;
@@ -158,10 +194,34 @@ export default function RifaDetailScreen() {
     return 'ocupado';
   }
 
-  function abrirModal(n: number) {
+  // Marcar / desmarcar un número de la grilla
+  function toggleNumero(n: number) {
     if (rifa?.estado !== 'activa') return;
     if (estadoNumero(n) !== 'libre') return;
-    setNumeroSeleccionado(n);
+    setSeleccionados(prev =>
+      prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n]
+    );
+  }
+
+  // Stepper "¿Cuántos boletos deseas?": + agrega el próximo número libre
+  function agregarUno() {
+    if (rifa?.estado !== 'activa') return;
+    for (let n = 1; n <= (rifa?.total_numeros ?? 0); n++) {
+      if (estadoNumero(n) === 'libre' && !seleccionados.includes(n)) {
+        setSeleccionados(prev => [...prev, n]);
+        return;
+      }
+    }
+  }
+
+  // - quita el último número que se agregó
+  function quitarUno() {
+    setSeleccionados(prev => prev.slice(0, -1));
+  }
+
+  // Abre el modal de compra con todos los números seleccionados
+  function irAlResumen() {
+    if (seleccionados.length === 0) return;
     setPaso('datos');
     setTarjetaNum(''); setTarjetaExp(''); setTarjetaCvv(''); setTarjetaNombre('');
     setCapturaSinpe(null);
@@ -235,6 +295,9 @@ export default function RifaDetailScreen() {
    * @param volverA paso al que regresar si algo falla.
    */
   async function registrarCompra(pagado: boolean, volverA: Paso) {
+    const numeros = [...seleccionados].sort((a, b) => a - b);
+    if (numeros.length === 0) return;
+
     setPaso('procesando');
     setComprando(true);
 
@@ -242,41 +305,47 @@ export default function RifaDetailScreen() {
     await new Promise(r => setTimeout(r, 2500));
 
     try {
-      const numeroRef = doc(db, 'rifas', id!, 'numeros', String(numeroSeleccionado));
       const rifaRef = doc(db, 'rifas', id!);
+      const numeroRefs = numeros.map(n => doc(db, 'rifas', id!, 'numeros', String(n)));
 
       await runTransaction(db, async (tx) => {
-        const snap = await tx.get(numeroRef);
-        if (snap.exists()) throw new Error('ocupado');
-
+        // Todas las lecturas van primero (requisito de Firestore)
         const rifaSnap = await tx.get(rifaRef);
         if (!rifaSnap.exists()) throw new Error('no-rifa');
 
-        tx.set(numeroRef, {
-          comprador_uid: user!.uid,
-          comprador_nombre: compradorNombre.trim(),
-          comprador_telefono: compradorTelefono.trim(),
-          comprado_en: serverTimestamp(),
-          pagado,
-          rifa_titulo: rifa?.titulo ?? '',
+        const snaps = await Promise.all(numeroRefs.map(ref => tx.get(ref)));
+        if (snaps.some(s => s.exists())) throw new Error('ocupado');
+
+        // Luego las escrituras
+        numeroRefs.forEach(ref => {
+          tx.set(ref, {
+            comprador_uid: user!.uid,
+            comprador_nombre: compradorNombre.trim(),
+            comprador_telefono: compradorTelefono.trim(),
+            comprado_en: serverTimestamp(),
+            pagado,
+            rifa_titulo: rifa?.titulo ?? '',
+          });
         });
 
-        tx.update(rifaRef, { vendidos: (rifaSnap.data().vendidos ?? 0) + 1 });
+        tx.update(rifaRef, { vendidos: (rifaSnap.data().vendidos ?? 0) + numeros.length });
       });
 
+      setFechaCompra(new Date());
       setPaso('exito');
 
+      const lista = numeros.map(n => `#${n}`).join(', ');
       enviarNotificacion(
-        "Numero Adquirido",
-        `El numero #${numeroSeleccionado} para la rifa "${rifa?.titulo}" es tuyo. Buena suerte`
+        numeros.length > 1 ? 'Números Adquiridos' : 'Número Adquirido',
+        `${numeros.length > 1 ? 'Los números' : 'El número'} ${lista} para la rifa "${rifa?.titulo}" ${numeros.length > 1 ? 'son tuyos' : 'es tuyo'}. Buena suerte`
       ).catch(() => {});
 
-      procesarNotificacionAlCreador(id!, String(numeroSeleccionado));
+      procesarNotificacionAlCreador(id!, numeros);
     } catch (e: any) {
       setComprando(false);
       setPaso(volverA);
       const msg = e.message === 'ocupado'
-        ? 'Alguien acaba de comprar ese número. Elegí otro.'
+        ? 'Alguien acaba de comprar uno de esos números. Revisá tu selección.'
         : 'No se pudo procesar el pago. Intentá de nuevo.';
       if (Platform.OS === 'web') window.alert(msg);
       else Alert.alert('Error', msg);
@@ -304,6 +373,9 @@ export default function RifaDetailScreen() {
   const pct = rifa.total_numeros > 0 ? rifa.vendidos / rifa.total_numeros : 0;
   const numeros = Array.from({ length: rifa.total_numeros }, (_, i) => i + 1);
   const esActiva = rifa.estado === 'activa';
+  const cantidad = seleccionados.length;
+  const total = cantidad * (rifa.precio ?? 0);
+  const numerosOrdenados = [...seleccionados].sort((a, b) => a - b);
   const esAdmin = perfil?.rol === 'admin';
   const esCreador = rifa.creado_por_uid === user?.uid;
   const puedeGestionar = esAdmin || esCreador;
@@ -325,7 +397,9 @@ export default function RifaDetailScreen() {
         )}
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: cantidad > 0 && esActiva ? 140 : 24 }}>
         {/* Info de la rifa */}
         <View style={styles.infoCard}>
           <Text style={styles.premioLabel}>Premio</Text>
@@ -389,11 +463,32 @@ export default function RifaDetailScreen() {
           </View>
         )}
 
+        {/* ¿Cuántos boletos deseas? */}
+        {esActiva && (
+          <View style={styles.cantidadCard}>
+            <Text style={styles.cantidadTitulo}>¿Cuántos boletos deseas?</Text>
+            <View style={styles.stepper}>
+              <Pressable
+                onPress={quitarUno}
+                disabled={cantidad === 0}
+                style={[styles.stepBtn, cantidad === 0 && styles.stepBtnDisabled]}>
+                <Ionicons name="remove" size={22} color={cantidad === 0 ? Brand.onLightMuted : Brand.primary} />
+              </Pressable>
+              <Text style={styles.stepVal}>{cantidad}</Text>
+              <Pressable onPress={agregarUno} style={styles.stepBtnDark}>
+                <Ionicons name="add" size={22} color={Brand.white} />
+              </Pressable>
+            </View>
+            <Text style={styles.cantidadHint}>Elige tus números de suerte</Text>
+          </View>
+        )}
+
         {/* Leyenda */}
         <View style={styles.leyenda}>
           <LeyendaItem color={Brand.white} border="#D0DAD8" label="Disponible" />
+          <LeyendaItem color={Brand.accent} label="Seleccionado" />
           <LeyendaItem color={Brand.primary} label="Tuyo" />
-          <LeyendaItem color="#C8D8D6" label="Ocupado" />
+          <LeyendaItem color="#C8D8D6" label="Agotado" />
         </View>
 
         {/* Grilla de números */}
@@ -401,6 +496,7 @@ export default function RifaDetailScreen() {
           <View style={styles.grilla}>
             {numeros.map(n => {
               const estado = estadoNumero(n);
+              const seleccionado = seleccionados.includes(n);
               return (
                 <Pressable
                   key={n}
@@ -408,14 +504,16 @@ export default function RifaDetailScreen() {
                     styles.numBtn,
                     estado === 'mio' && styles.numBtnMio,
                     estado === 'ocupado' && styles.numBtnOcupado,
-                    (!esActiva || estado !== 'libre') && styles.numBtnDisabled,
+                    seleccionado && styles.numBtnSeleccionado,
+                    (!esActiva || estado !== 'libre') && !seleccionado && styles.numBtnDisabled,
                   ]}
-                  onPress={() => abrirModal(n)}
+                  onPress={() => toggleNumero(n)}
                   disabled={!esActiva || estado !== 'libre'}>
                   <Text style={[
                     styles.numText,
                     estado === 'mio' && styles.numTextMio,
                     estado === 'ocupado' && styles.numTextOcupado,
+                    seleccionado && styles.numTextSeleccionado,
                   ]}>
                     {n}
                   </Text>
@@ -435,12 +533,105 @@ export default function RifaDetailScreen() {
         )}
       </ScrollView>
 
+      {/* Barra inferior con total y CTA */}
+      {esActiva && cantidad > 0 && (
+        <View style={[styles.footerBar, { paddingBottom: insets.bottom + 12 }]}>
+          <View style={styles.footerInfo}>
+            <Text style={styles.footerCount}>
+              {cantidad} boleto{cantidad !== 1 ? 's' : ''} seleccionado{cantidad !== 1 ? 's' : ''}
+            </Text>
+            <Text style={styles.footerTotal}>Total: ₡{total.toLocaleString('es-CR')}</Text>
+          </View>
+          <Pressable
+            style={({ pressed }) => [styles.footerBtn, pressed && { opacity: 0.9 }]}
+            onPress={irAlResumen}>
+            <Text style={styles.footerBtnText}>Continuar al resumen</Text>
+          </Pressable>
+        </View>
+      )}
+
       {/* Modal de compra */}
       <Modal
         visible={modalVisible}
         transparent
         animationType="slide"
         onRequestClose={cerrarModal}>
+        {paso === 'procesando' ? (
+          <View style={styles.procesandoFull}>
+            <RingSpinner />
+            <Text style={styles.procesandoTitulo}>Procesando tu pago…</Text>
+            <Text style={styles.procesandoSub}>
+              Por favor espera, estamos confirmando tu transacción.
+            </Text>
+            <View style={styles.procesoSteps}>
+              <ProcesoStep label="Verificando datos…" estado={procesoPaso > 0 ? 'ok' : 'activo'} />
+              <ProcesoStep label="Procesando pago…" estado={procesoPaso > 1 ? 'ok' : procesoPaso === 1 ? 'activo' : 'pendiente'} />
+              <ProcesoStep label="Generando tu boleto…" estado={procesoPaso >= 2 ? 'activo' : 'pendiente'} />
+            </View>
+          </View>
+        ) : paso === 'exito' ? (
+          <View style={styles.exitoRoot}>
+            <ScrollView
+              contentContainerStyle={[styles.exitoScroll, { paddingBottom: insets.bottom + 24 }]}
+              showsVerticalScrollIndicator={false}>
+
+              {/* Hero verde */}
+              <View style={[styles.exitoHero, { paddingTop: insets.top + 36 }]}>
+                <View style={styles.exitoCheck}>
+                  <Ionicons name="checkmark" size={38} color={Brand.white} />
+                </View>
+                <Text style={styles.exitoHeroTitulo}>¡Pago Confirmado!</Text>
+                <Text style={styles.exitoHeroSub}>Tu boleto ha sido generado exitosamente</Text>
+              </View>
+
+              {/* Tarjeta boleto comprado */}
+              <View style={styles.boletoCard}>
+                <View style={styles.boletoCardTop}>
+                  <Text style={styles.boletoLabel}>BOLETO COMPRADO</Text>
+                  <View style={styles.boletoPrecioBadge}>
+                    <Text style={styles.boletoPrecioText}>₡{total.toLocaleString('es-CR')}</Text>
+                  </View>
+                </View>
+                <Text style={styles.boletoTitulo} numberOfLines={1}>{rifa.premio || rifa.titulo}</Text>
+                <Text style={styles.boletoNumeros}>
+                  Boleto{cantidad !== 1 ? 's' : ''} {formatearNumeros(numerosOrdenados)}
+                </Text>
+                <View style={styles.boletoDivider} />
+                <Text style={styles.boletoMeta}>
+                  {rifa.zona ? `${REGION} · ${rifa.zona}` : REGION}
+                </Text>
+                {fechaCompra && (
+                  <Text style={styles.boletoMeta}>{formatearFechaCompra(fechaCompra)}</Text>
+                )}
+              </View>
+
+              {/* QR */}
+              <View style={styles.qrCard}>
+                <Text style={styles.qrLabel}>Código QR del boleto</Text>
+                <View style={styles.qrBox}>
+                  <QRCode
+                    value={`TOMBOLITAS|rifa=${id}|n=${numerosOrdenados.join(',')}`}
+                    size={140}
+                    color={Brand.onLight}
+                    backgroundColor={Brand.white}
+                  />
+                </View>
+              </View>
+
+              {/* Botones */}
+              <Pressable
+                style={({ pressed }) => [styles.exitoBtnPrimary, pressed && { opacity: 0.9 }]}
+                onPress={() => { setModalVisible(false); setSeleccionados([]); router.replace('/(tabs)/mis-numeros' as any); }}>
+                <Text style={styles.exitoBtnPrimaryText}>Ver mis boletos</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.exitoBtnSecondary, pressed && { opacity: 0.9 }]}
+                onPress={() => { setModalVisible(false); setSeleccionados([]); router.replace('/(tabs)' as any); }}>
+                <Text style={styles.exitoBtnSecondaryText}>Volver al inicio</Text>
+              </Pressable>
+            </ScrollView>
+          </View>
+        ) : (
         <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -450,12 +641,28 @@ export default function RifaDetailScreen() {
             {paso === 'datos' && (
               <>
                 <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitulo}>Numero #{numeroSeleccionado}</Text>
+                  <Text style={styles.modalTitulo}>{cantidad} boleto{cantidad !== 1 ? 's' : ''}</Text>
                   <Pressable onPress={cerrarModal} style={styles.modalClose}>
                     <Ionicons name="close" size={20} color={Brand.onLightMuted} />
                   </Pressable>
                 </View>
-                <Text style={styles.modalPrecio}>₡{(rifa.precio ?? 0).toLocaleString('es-CR')} · Tarjeta o SINPE Móvil</Text>
+
+                {/* Chips de números elegidos */}
+                <View style={styles.chipsWrap}>
+                  {numerosOrdenados.map(n => (
+                    <View key={n} style={styles.chip}>
+                      <Text style={styles.chipText}>#{n}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                <View style={styles.resumenLinea}>
+                  <Text style={styles.resumenLineaLabel}>
+                    {cantidad} × ₡{(rifa.precio ?? 0).toLocaleString('es-CR')}
+                  </Text>
+                  <Text style={styles.resumenLineaTotal}>₡{total.toLocaleString('es-CR')}</Text>
+                </View>
+                <Text style={styles.modalPrecio}>Pagá con Tarjeta o SINPE Móvil</Text>
                 <View style={styles.modalCampo}>
                   <Text style={styles.modalLabel}>Nombre completo</Text>
                   <TextInput style={styles.modalInput} value={compradorNombre} onChangeText={setCompradorNombre}
@@ -584,7 +791,7 @@ export default function RifaDetailScreen() {
 
                 <Pressable style={({ pressed }) => [styles.comprarBtn, pressed && { opacity: 0.88 }]} onPress={procesarPago}>
                   <Ionicons name="card-outline" size={18} color={Brand.white} />
-                  <Text style={styles.comprarBtnText}>Pagar ₡{(rifa.precio ?? 0).toLocaleString('es-CR')}</Text>
+                  <Text style={styles.comprarBtnText}>Pagar ₡{total.toLocaleString('es-CR')}</Text>
                 </Pressable>
               </>
             )}
@@ -607,7 +814,7 @@ export default function RifaDetailScreen() {
                   <Text style={styles.sinpeLabel}>Realizá tu transferencia a:</Text>
                   <Text style={styles.sinpeNumero}>{SINPE_NUMERO}</Text>
                   <Text style={styles.sinpeOrg}>{AppInfo.name} · {AppInfo.region}</Text>
-                  <Text style={styles.sinpeMonto}>Monto exacto: ₡{(rifa.precio ?? 0).toLocaleString('es-CR')}</Text>
+                  <Text style={styles.sinpeMonto}>Monto exacto: ₡{total.toLocaleString('es-CR')}</Text>
                 </View>
 
                 <Text style={styles.modalLabel}>Subí la captura de la transferencia</Text>
@@ -637,37 +844,36 @@ export default function RifaDetailScreen() {
               </>
             )}
 
-            {/* PASO 3: Procesando */}
-            {paso === 'procesando' && (
-              <View style={styles.procesandoWrap}>
-                <ActivityIndicator size="large" color={Brand.primary} />
-                <Text style={styles.procesandoTitulo}>Procesando pago…</Text>
-                <Text style={styles.procesandoSub}>No cerres esta ventana</Text>
-              </View>
-            )}
-
-            {/* PASO 4: Éxito */}
-            {paso === 'exito' && (
-              <View style={styles.exitoWrap}>
-                <View style={styles.exitoIcono}>
-                  <Ionicons name="checkmark" size={40} color={Brand.white} />
-                </View>
-                <Text style={styles.exitoTitulo}>¡Boleto reservado!</Text>
-                <Text style={styles.exitoSub}>
-                  El numero <Text style={{ fontWeight: '800' }}>#{numeroSeleccionado}</Text> es tuyo.{'\n'}
-                  Buena suerte en el sorteo
-                </Text>
-                <Pressable
-                  style={({ pressed }) => [styles.comprarBtn, { marginTop: 8 }, pressed && { opacity: 0.88 }]}
-                  onPress={() => setModalVisible(false)}>
-                  <Text style={styles.comprarBtnText}>Ver mi numero</Text>
-                </Pressable>
-              </View>
-            )}
-
           </View>
         </KeyboardAvoidingView>
+        )}
       </Modal>
+    </View>
+  );
+}
+
+/** Anillo naranja girando para la pantalla de procesamiento. */
+function RingSpinner() {
+  const rot = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const anim = Animated.loop(
+      Animated.timing(rot, { toValue: 1, duration: 1000, easing: Easing.linear, useNativeDriver: true }),
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [rot]);
+  const spin = rot.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  return <Animated.View style={[styles.ring, { transform: [{ rotate: spin }] }]} />;
+}
+
+/** Una fila de estado en la pantalla de procesamiento. */
+function ProcesoStep({ label, estado }: { label: string; estado: 'ok' | 'activo' | 'pendiente' }) {
+  return (
+    <View style={[styles.procesoStep, estado === 'activo' && styles.procesoStepActivo, estado === 'pendiente' && styles.procesoStepPendiente]}>
+      <View style={[styles.procesoDot, estado !== 'pendiente' && styles.procesoDotActivo]}>
+        {estado === 'ok' && <Ionicons name="checkmark" size={12} color={Brand.primaryDeep} />}
+      </View>
+      <Text style={[styles.procesoStepText, estado === 'pendiente' && styles.procesoStepTextPendiente]}>{label}</Text>
     </View>
   );
 }
@@ -838,10 +1044,77 @@ const styles = StyleSheet.create({
   },
   numBtnMio: { backgroundColor: Brand.primary, borderColor: Brand.primary },
   numBtnOcupado: { backgroundColor: '#C8D8D6', borderColor: '#B0C4C2' },
+  numBtnSeleccionado: { backgroundColor: Brand.accent, borderColor: Brand.accent },
   numBtnDisabled: { opacity: 0.85 },
   numText: { fontSize: 13, fontWeight: '700', color: Brand.onLight },
   numTextMio: { color: Brand.white },
   numTextOcupado: { color: Brand.onLightMuted },
+  numTextSeleccionado: { color: Brand.white },
+
+  // --- ¿CUÁNTOS BOLETOS? (STEPPER) ---
+  cantidadCard: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    alignItems: 'center',
+    gap: 12,
+  },
+  cantidadTitulo: { fontSize: 16, fontWeight: '800', color: Brand.onLight },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: 20 },
+  stepBtn: {
+    width: 48, height: 48, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Brand.primary + '18',
+  },
+  stepBtnDisabled: { backgroundColor: '#EDF1F0' },
+  stepBtnDark: {
+    width: 48, height: 48, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Brand.primary,
+  },
+  stepVal: { fontSize: 24, fontWeight: '900', color: Brand.onLight, minWidth: 44, textAlign: 'center' },
+  cantidadHint: { fontSize: 14, fontWeight: '700', color: Brand.onLight, alignSelf: 'flex-start' },
+
+  // --- BARRA INFERIOR (TOTAL + CTA) ---
+  footerBar: {
+    position: 'absolute',
+    left: 0, right: 0, bottom: 0,
+    backgroundColor: Brand.white,
+    borderTopWidth: 1,
+    borderTopColor: '#E7EEED',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    gap: 10,
+    shadowColor: Brand.onLight,
+    shadowOpacity: 0.08, shadowRadius: 12,
+    shadowOffset: { width: 0, height: -4 }, elevation: 12,
+  },
+  footerInfo: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  footerCount: { fontSize: 13, color: Brand.onLightMuted, fontWeight: '600' },
+  footerTotal: { fontSize: 20, fontWeight: '900', color: Brand.primary },
+  footerBtn: {
+    backgroundColor: Brand.primary,
+    borderRadius: 16,
+    height: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  footerBtnText: { color: Brand.white, fontSize: 16, fontWeight: '800' },
+
+  // --- CHIPS / RESUMEN EN MODAL ---
+  chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    backgroundColor: Brand.accent + '22',
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  chipText: { fontSize: 14, fontWeight: '800', color: Brand.accentText },
+  resumenLinea: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderTopWidth: 1, borderTopColor: '#F0F4F3', paddingTop: 12,
+  },
+  resumenLineaLabel: { fontSize: 14, color: Brand.onLightMuted, fontWeight: '600' },
+  resumenLineaTotal: { fontSize: 20, fontWeight: '900', color: Brand.primary },
 
   // --- BANNERS (GANADOR/CERRADA) ---
   ganadorBanner: {
@@ -957,21 +1230,102 @@ const styles = StyleSheet.create({
   seguridadWrap: { flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center' },
   seguridadText: { fontSize: 11, color: Brand.onLightMuted },
 
-  // --- PROCESAMIENTO Y ÉXITO ---
-  procesandoWrap: { alignItems: 'center', paddingVertical: 32, gap: 14 },
-  procesandoTitulo: { fontSize: 18, fontWeight: '700', color: Brand.onLight },
-  procesandoSub: { fontSize: 13, color: Brand.onLightMuted },
-  exitoWrap: { alignItems: 'center', paddingVertical: 16, gap: 12 },
-  exitoIcono: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: Brand.success,
+  // --- PROCESAMIENTO (PANTALLA COMPLETA) ---
+  procesandoFull: {
+    flex: 1,
+    backgroundColor: Brand.primaryDark,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 36,
   },
-  exitoTitulo: { fontSize: 22, fontWeight: '800', color: Brand.onLight },
-  exitoSub: { fontSize: 14, color: Brand.onLightMuted, textAlign: 'center', lineHeight: 21 },
+  ring: {
+    width: 92, height: 92, borderRadius: 46,
+    borderWidth: 6,
+    borderColor: Brand.accent,
+    borderTopColor: 'transparent',
+    marginBottom: 28,
+  },
+  procesandoTitulo: { fontSize: 22, fontWeight: '800', color: Brand.white, textAlign: 'center' },
+  procesandoSub: {
+    fontSize: 14, color: Brand.onDarkMuted, textAlign: 'center',
+    marginTop: 8, lineHeight: 20,
+  },
+  procesoSteps: { alignSelf: 'stretch', gap: 12, marginTop: 34 },
+  procesoStep: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: Brand.white + '10',
+    borderRadius: 14, paddingVertical: 14, paddingHorizontal: 16,
+  },
+  procesoStepActivo: { backgroundColor: Brand.white + '1A' },
+  procesoStepPendiente: { opacity: 0.5 },
+  procesoDot: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: Brand.white + '33',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  procesoDotActivo: { backgroundColor: Brand.accent },
+  procesoStepText: { fontSize: 15, fontWeight: '700', color: Brand.white },
+  procesoStepTextPendiente: { color: Brand.onDarkMuted, fontWeight: '600' },
+
+  // --- ÉXITO (PANTALLA COMPLETA) ---
+  exitoRoot: { flex: 1, backgroundColor: Brand.cream },
+  exitoScroll: { paddingBottom: 24 },
+  exitoHero: {
+    backgroundColor: Brand.primaryDark,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    alignItems: 'center',
+    paddingBottom: 32,
+    paddingHorizontal: 24,
+  },
+  exitoCheck: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: Brand.success,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 16,
+  },
+  exitoHeroTitulo: { fontSize: 24, fontWeight: '900', color: Brand.white },
+  exitoHeroSub: { fontSize: 14, color: Brand.onDarkMuted, marginTop: 6, textAlign: 'center' },
+
+  boletoCard: {
+    backgroundColor: Brand.white, borderRadius: 18, padding: 18, gap: 6,
+    marginHorizontal: 20, marginTop: 20,
+    borderWidth: 1, borderColor: Brand.onLight + '10',
+    shadowColor: Brand.onLight, shadowOpacity: 0.06, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 3,
+  },
+  boletoCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  boletoLabel: { fontSize: 11, fontWeight: '800', color: Brand.onLightMuted, letterSpacing: 0.8 },
+  boletoPrecioBadge: { backgroundColor: '#F0F4F3', borderRadius: 10, paddingVertical: 5, paddingHorizontal: 12 },
+  boletoPrecioText: { fontSize: 14, fontWeight: '900', color: Brand.primary },
+  boletoTitulo: { fontSize: 20, fontWeight: '900', color: Brand.onLight, marginTop: 2 },
+  boletoNumeros: { fontSize: 14, color: Brand.onLightMuted, fontWeight: '600' },
+  boletoDivider: { height: 1, backgroundColor: '#F0F4F3', marginVertical: 8 },
+  boletoMeta: { fontSize: 13, color: Brand.onLightMuted },
+
+  qrCard: {
+    backgroundColor: Brand.white, borderRadius: 18, padding: 18, gap: 14,
+    marginHorizontal: 20, marginTop: 14,
+    borderWidth: 1, borderColor: Brand.onLight + '10',
+    shadowColor: Brand.onLight, shadowOpacity: 0.06, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 3,
+  },
+  qrLabel: { fontSize: 13, fontWeight: '700', color: Brand.onLight },
+  qrBox: { alignSelf: 'center', padding: 8, backgroundColor: Brand.white, borderRadius: 12 },
+
+  exitoBtnPrimary: {
+    backgroundColor: Brand.primaryDark, borderRadius: 16, height: 54,
+    alignItems: 'center', justifyContent: 'center',
+    marginHorizontal: 20, marginTop: 22,
+  },
+  exitoBtnPrimaryText: { color: Brand.white, fontSize: 16, fontWeight: '800' },
+  exitoBtnSecondary: {
+    borderRadius: 16, height: 54,
+    alignItems: 'center', justifyContent: 'center',
+    marginHorizontal: 20, marginTop: 12,
+    borderWidth: 1.5, borderColor: Brand.primary + '55',
+  },
+  exitoBtnSecondaryText: { color: Brand.primary, fontSize: 16, fontWeight: '800' },
 
   // --- MÉTODO DE PAGO ---
   metodoOpcion: {

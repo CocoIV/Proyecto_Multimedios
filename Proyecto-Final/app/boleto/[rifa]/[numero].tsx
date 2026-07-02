@@ -15,13 +15,14 @@ import QRCode from 'react-native-qrcode-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { db } from '@/config/firebase';
-import { AppInfo, Brand } from '@/constants/brand';
+import { Brand } from '@/constants/brand';
+import { REGION } from '@/constants/zonas';
 import type { NumeroDoc, Rifa } from '@/types/rifa';
 
-/** ID legible del boleto, estable por rifa + número. */
-function ticketId(rifaId: string, numero: string) {
+/** ID legible del boleto: código de zona (ej. GOL para Golfito) + número. */
+function ticketId(zona: string | undefined, numero: string) {
   const year = new Date().getFullYear();
-  const code = rifaId.slice(0, 3).toUpperCase();
+  const code = (zona ?? '').replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase() || 'CR';
   return `TOM-${year}-${code}-${numero.padStart(3, '0')}`;
 }
 
@@ -52,8 +53,9 @@ export default function DetalleBoletoScreen() {
     return () => { unsubRifa(); unsubNum(); };
   }, [rifaId, numero]);
 
-  const id = ticketId(rifaId ?? '', numero ?? '');
+  const id = ticketId(rifa?.zona, numero ?? '');
   const fecha = formatearFecha(rifa?.fecha_sorteo) ?? formatearFecha(rifa?.sorteado_en);
+  const zonaLinea = rifa?.zona ? `${rifa.zona} · ${REGION}` : REGION;
   const qrValue = `TOMBOLITAS|${id}|rifa=${rifaId}|n=${numero}`;
 
   function descargar() {
@@ -63,9 +65,9 @@ export default function DetalleBoletoScreen() {
   }
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
+    <View style={styles.root}>
       {/* NavBar */}
-      <View style={styles.navBar}>
+      <View style={[styles.navBar, { paddingTop: insets.top + 6 }]}>
         <Pressable onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={Brand.white} />
         </Pressable>
@@ -85,7 +87,7 @@ export default function DetalleBoletoScreen() {
             <View style={styles.franja}>
               <Text style={styles.franjaTitulo} numberOfLines={1}>{rifa?.premio ?? rifa?.titulo ?? 'Rifa'}</Text>
               <Text style={styles.franjaSub}>
-                {AppInfo.region}{fecha ? ` · Sorteo ${fecha}` : ''}
+                {zonaLinea}{fecha ? ` · Sorteo ${fecha}` : ''}
               </Text>
             </View>
 
@@ -126,7 +128,6 @@ export default function DetalleBoletoScreen() {
           {/* Botones */}
           <View style={[styles.acciones, { paddingBottom: insets.bottom + 16 }]}>
             <Pressable style={({ pressed }) => [styles.btnDescargar, pressed && { opacity: 0.9 }]} onPress={descargar}>
-              <Ionicons name="download-outline" size={18} color={Brand.white} />
               <Text style={styles.btnDescargarText}>Descargar boleto</Text>
             </Pressable>
             <Pressable style={({ pressed }) => [styles.btnVolver, pressed && { opacity: 0.9 }]} onPress={() => router.back()}>
@@ -140,12 +141,13 @@ export default function DetalleBoletoScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Brand.primaryDark },
+  root: { flex: 1, backgroundColor: Brand.cream },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
   navBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 10,
+    paddingHorizontal: 16, paddingBottom: 14,
+    backgroundColor: Brand.primaryDark,
   },
   backBtn: {
     width: 40, height: 40, borderRadius: 12, backgroundColor: Brand.white + '1A',
@@ -153,13 +155,14 @@ const styles = StyleSheet.create({
   },
   navTitulo: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '800', color: Brand.white, marginHorizontal: 8 },
 
-  contenido: { flex: 1, paddingHorizontal: 20, justifyContent: 'space-between' },
+  contenido: { flex: 1, paddingHorizontal: 20, paddingTop: 12, justifyContent: 'space-between' },
 
   card: {
     backgroundColor: Brand.white, borderRadius: 22, overflow: 'hidden',
     marginTop: 8,
-    shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 20,
-    shadowOffset: { width: 0, height: 10 }, elevation: 8,
+    borderWidth: 1, borderColor: Brand.onLight + '10',
+    shadowColor: Brand.onLight, shadowOpacity: 0.08, shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 }, elevation: 4,
   },
   franja: {
     backgroundColor: Brand.primaryDark, paddingVertical: 14, paddingHorizontal: 18,
@@ -190,9 +193,8 @@ const styles = StyleSheet.create({
 
   acciones: { gap: 12 },
   btnDescargar: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: Brand.primaryDeep, borderRadius: 16, height: 54,
-    borderWidth: 1, borderColor: Brand.white + '1A',
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Brand.primaryDark, borderRadius: 16, height: 54,
   },
   btnDescargarText: { color: Brand.white, fontSize: 16, fontWeight: '700' },
   btnVolver: {
