@@ -119,12 +119,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // En nativo (Expo Go / build) el popup de Firebase no está disponible.
-    // Requiere expo-auth-session + Client IDs de Google. Mientras tanto,
-    // avisamos con un mensaje claro en vez de fallar en silencio.
+    // En nativo el flujo de Google se maneja en la pantalla de login con
+    // `expo-auth-session` (Google.useAuthRequest) y Client IDs por plataforma
+    // definidos en `constants/google.ts`. Esta función solo cubre el caso web.
     throw new Error(
-      'El inicio con Google en móvil requiere configurar expo-auth-session. ' +
-        'Por ahora probá la app en la web (npx expo start --web).'
+      'En móvil, iniciá sesión con Google desde la pantalla de login.'
     );
   }
 

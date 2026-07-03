@@ -57,6 +57,13 @@ export async function enviarNotificacion(titulo: string, mensaje: string) {
 export async function registrarPushTokenEnBaseDatos(uid: string) {
   if (Platform.OS === 'web') return;
 
+  // Las push remotas fueron removidas de Expo Go (SDK 53+). Sin un development
+  // build, getExpoPushTokenAsync lanza error. Detectamos Expo Go y salimos.
+  if (Constants.appOwnership === 'expo') {
+    console.log('Push remotas no disponibles en Expo Go — usá un development build.');
+    return;
+  }
+
   try {
     // Reutilizamos tu función para asegurarnos de tener permisos
     const tienePermisos = await configurarPermisosNotificaciones();

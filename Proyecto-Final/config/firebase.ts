@@ -1,10 +1,13 @@
 // Conexión central con Firebase.
 // Importa desde aquí en el resto de la app: import { auth, db } from '@/config/firebase'
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+// @ts-ignore — getReactNativePersistence no está en los tipos de la build web, pero existe en runtime.
+import { getAuth, getReactNativePersistence, initializeAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { Platform } from "react-native";
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -19,8 +22,13 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-// Servicios listos para usar en toda la app.
-export const auth = getAuth(app);
+// Auth: en móvil usamos AsyncStorage para que la sesión persista entre reinicios.
+// En web, getAuth ya persiste en el almacenamiento del navegador.
+export const auth =
+  Platform.OS === 'web'
+    ? getAuth(app)
+    : initializeAuth(app, { persistence: getReactNativePersistence(AsyncStorage) });
+
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 

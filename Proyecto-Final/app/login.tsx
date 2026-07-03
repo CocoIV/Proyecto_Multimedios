@@ -25,13 +25,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { auth } from '@/config/firebase';
 import { AppInfo, Brand } from '@/constants/brand';
+import { GOOGLE } from '@/constants/google';
 
 WebBrowser.maybeCompleteAuthSession();
 
 type Modo = 'login' | 'registro';
-
-// Web Client ID: Firebase Console → Authentication → Sign-in method → Google → Web SDK configuration
-const WEB_CLIENT_ID = '754803091254-hvuamdle45tn3i0t81i0r326b7aauk9i.apps.googleusercontent.com';
 
 /** Ilustración de tómbola al estilo Tombolitas CR (esfera + bolas + soporte). */
 function Tombola() {
@@ -65,20 +63,30 @@ export default function LoginScreen() {
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [, googleResponse, googlePromptAsync] = Google.useAuthRequest({
-    webClientId: WEB_CLIENT_ID,
-    androidClientId: '118765398066-sc546pl3fmpjbreab95k5o5diaqdoo1c.apps.googleusercontent.com',
+  const [googleRequest, googleResponse, googlePromptAsync] = Google.useAuthRequest({
+    webClientId: GOOGLE.webClientId,
+    androidClientId: GOOGLE.androidClientId || undefined,
+    iosClientId: GOOGLE.iosClientId || undefined,
   });
 
   useEffect(() => {
-    if (googleResponse?.type === 'success') {
-      const { id_token } = googleResponse.params;
-      const credential = GoogleAuthProvider.credential(id_token);
+    if (!googleResponse) return;
+
+    if (googleResponse.type === 'success') {
+      const idToken = googleResponse.params?.id_token;
+      if (!idToken) {
+        setError('Google no devolvió las credenciales. Intentá de nuevo.');
+        return;
+      }
+      const credential = GoogleAuthProvider.credential(idToken);
       setCargando(true);
       signInWithCredential(auth, credential)
         .catch((e: any) => setError(mensajeError(e.code ?? '')))
         .finally(() => setCargando(false));
+    } else if (googleResponse.type === 'error') {
+      setError('No se pudo iniciar sesión con Google. Intentá de nuevo.');
     }
+    // type === 'dismiss' / 'cancel' → el usuario cerró el flujo, no mostramos error.
   }, [googleResponse]);
 
   function limpiar() {
@@ -134,6 +142,10 @@ export default function LoginScreen() {
 
   function entrarConGoogle() {
     setError(null);
+    if (!googleRequest) {
+      setError('El acceso con Google no está disponible en este dispositivo.');
+      return;
+    }
     googlePromptAsync();
   }
 
