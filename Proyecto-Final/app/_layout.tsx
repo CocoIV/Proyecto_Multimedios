@@ -92,6 +92,8 @@ function RootNavigator() {
         <Stack.Screen name="ganador/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="premio/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="resultados" options={{ headerShown: false }} />
+        <Stack.Screen name="ayuda" options={{ headerShown: false }} />
+        <Stack.Screen name="acerca-de" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>
       <StatusBar style="auto" />

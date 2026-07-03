@@ -326,6 +326,35 @@ export default function PerfilScreen() {
           </View>
         </View>
 
+        {/* Ayuda y soporte */}
+        <View style={styles.seccion}>
+          <Text style={styles.seccionLabel}>Ayuda y soporte</Text>
+          <Pressable
+            style={({ pressed }) => [styles.campo, pressed && { backgroundColor: '#F8FAFA' }]}
+            onPress={() => router.push('/ayuda' as any)}>
+            <View style={[styles.campoIcono, { backgroundColor: Brand.accent + '20' }]}>
+              <Ionicons name="help-circle-outline" size={17} color={Brand.accentText} />
+            </View>
+            <View style={styles.campoInfo}>
+              <Text style={styles.campoLabel}>Ayuda</Text>
+              <Text style={styles.campoValor}>Preguntas frecuentes y soporte</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={Brand.onLightMuted} />
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.campo, styles.separador, pressed && { backgroundColor: '#F8FAFA' }]}
+            onPress={() => router.push('/acerca-de' as any)}>
+            <View style={[styles.campoIcono, { backgroundColor: Brand.primary + '15' }]}>
+              <Ionicons name="information-circle-outline" size={17} color={Brand.primary} />
+            </View>
+            <View style={styles.campoInfo}>
+              <Text style={styles.campoLabel}>Acerca de</Text>
+              <Text style={styles.campoValor}>Información de la app y versión</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={Brand.onLightMuted} />
+          </Pressable>
+        </View>
+
         {/* Cerrar sesión */}
         <Pressable
           style={({ pressed }) => [styles.logoutBtn, pressed && { opacity: 0.85 }]}
